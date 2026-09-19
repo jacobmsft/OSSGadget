@@ -108,7 +108,7 @@ public class SourceRepositoryCandidateSetTests
             new[]
             {
                 new SourceRepositoryWarning(
-                    SourceRepositoryWarningKind.RootPath,
+                    SourceRepositoryWarningKind.NonRootPath,
                     "repository field was used")
             },
             SourceRepositoryRelationship.Upstream);

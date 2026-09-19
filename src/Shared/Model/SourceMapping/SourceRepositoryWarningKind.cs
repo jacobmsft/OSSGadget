@@ -11,7 +11,7 @@ public enum SourceRepositoryWarningKind
     Ambiguous,
     Fork,
     Upstream,
-    RootPath,
+    NonRootPath,
     Malformed,
     OperationalFailure
 }
