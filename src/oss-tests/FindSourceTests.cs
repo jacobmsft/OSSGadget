@@ -74,7 +74,9 @@ public class FindSourceTests
         PackageURL package = new("pkg:npm/example");
         PackageURL ecosystemRepository = new("pkg:github/contoso/ecosystem");
         Mock<IBaseProjectManager> manager = new();
-        manager.Setup(m => m.IdentifySourceRepositoryCandidatesAsync(package, true))
+        manager.Setup(m => m.SearchSourceRepositoryCandidatesInPackageMetadataAsync(
+                package,
+                "https://github.com/contoso/generic"))
             .ReturnsAsync(new[] { CreateCandidate(ecosystemRepository.ToString(), 0.9, "ecosystem") });
         manager.Setup(m => m.GetMetadataAsync(package, true))
             .ReturnsAsync("https://github.com/contoso/generic");
@@ -89,6 +91,47 @@ public class FindSourceTests
             "pkg:github/contoso/ecosystem",
             "pkg:github/contoso/generic",
         }, candidates.Keys.Select(candidate => candidate.ToString()));
+    }
+
+    [Fact]
+    public async Task RepoSearch_ContinuesGenericDiscoveryWhenEcosystemParserFails()
+    {
+        PackageURL package = new("pkg:maven/contoso/example@1.0.0");
+        const string metadata =
+            "<project><scm>malformed https://github.com/contoso/example";
+        Mock<IBaseProjectManager> manager = new();
+        manager.Setup(m => m.SearchSourceRepositoryCandidatesInPackageMetadataAsync(
+                package,
+                metadata))
+            .ThrowsAsync(new InvalidOperationException("Malformed ecosystem metadata."));
+        manager.Setup(m => m.GetMetadataAsync(package, true))
+            .ReturnsAsync(metadata);
+        Mock<IProjectManagerFactory> factory = new();
+        factory.Setup(f => f.CreateProjectManager(package, ".", null)).Returns(manager.Object);
+
+        RepoSearch search = new(factory.Object);
+        Dictionary<PackageURL, double> candidates = await search.ResolvePackageLibraryAsync(package);
+
+        Assert.Contains(
+            candidates.Keys,
+            candidate => candidate.ToString() == "pkg:github/contoso/example");
+    }
+
+    [Theory]
+    [InlineData(
+        "pkg:github/acme/project@main#src",
+        "https://github.com/acme/project/tree/main/src")]
+    [InlineData(
+        "pkg:gitlab/acme/project@release#packages/example",
+        "https://gitlab.com/acme/project/-/tree/release/packages/example")]
+    [InlineData(
+        "pkg:generic/git.example.com/acme/project",
+        "https://git.example.com/acme/project")]
+    public void RepositoryDisplayUrlUsesCandidateProvider(string repository, string expected)
+    {
+        Assert.Equal(
+            expected,
+            FindSourceTool.GetRepositoryDisplayUrl(new PackageURL(repository)));
     }
 
     [Fact]

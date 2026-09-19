@@ -8,6 +8,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
     using Microsoft.CST.OpenSource.Model;
     using Model.Enums;
     using Model.PackageExistence;
+    using Model.SourceMapping;
     using PackageActions;
     using PackageUrl;
     using System;
@@ -386,12 +387,20 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             }
             catch (HttpRequestException ex)
             {
-                Logger.Debug(ex, "HTTP error fetching NPM metadata for {0}: {1}", purl, ex.Message);
+                Logger.Debug(
+                    "HTTP error fetching NPM metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
                 return null;
             }
             catch (Exception ex)
             {
-                Logger.Debug(ex, "Error fetching NPM metadata for {0}: {1}", purl, ex.Message);
+                Logger.Debug(
+                    "Error fetching NPM metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
                 return null;
             }
         }
@@ -555,7 +564,9 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                     // repository
                     if (includeRepositoryMetadata)
                     {
-                        Dictionary<PackageURL, double> repoMappings = await SearchRepoUrlsInPackageMetadata(purl, contentJSON);
+                        Dictionary<PackageURL, double> repoMappings = await SearchRepoUrlsInPackageMetadata(
+                            purl,
+                            contentJSON.RootElement.GetRawText());
                         foreach (KeyValuePair<PackageURL, double> repoMapping in repoMappings)
                         {
                             Repository repository = new()
@@ -882,9 +893,38 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         protected override async Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl,
             string metadata)
         {
-            if (string.IsNullOrEmpty(metadata))
+            IReadOnlyList<SourceRepositoryCandidate> candidates =
+                await SearchSourceRepositoryCandidatesInPackageMetadataAsync(purl, metadata);
+            return new SourceRepositoryCandidateSet(candidates).ToCompatibilityDictionary();
+        }
+
+        public override Task<IReadOnlyList<SourceRepositoryCandidate>> SearchSourceRepositoryCandidatesInPackageMetadataAsync(
+            PackageURL purl,
+            string metadata)
+        {
+            List<SourceRepositoryCandidate> candidates = new();
+            if (purl.Name is string purlName && (purlName.StartsWith('_') || npm_internal_modules.Contains(purlName)))
             {
-                return new Dictionary<PackageURL, double>();
+                PackageURL curatedMapping = new("github", "nodejs", "node", "master", null, "lib");
+                candidates.Add(new SourceRepositoryCandidate(
+                    new SourceRepositoryIdentity(curatedMapping),
+                    new[]
+                    {
+                        new SourceRepositoryEvidence(
+                            SourceRepositoryEvidenceKind.BuiltInMapping,
+                            "node.internal",
+                            "https://github.com/nodejs/node/tree/master/lib",
+                            purl.Version)
+                    },
+                    1.0,
+                    purl.Version,
+                    curatedMapping.Version));
+                return Task.FromResult<IReadOnlyList<SourceRepositoryCandidate>>(candidates);
+            }
+
+            if (string.IsNullOrWhiteSpace(metadata))
+            {
+                return Task.FromResult<IReadOnlyList<SourceRepositoryCandidate>>(candidates);
             }
 
             JsonDocument contentJSON;
@@ -894,86 +934,40 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             }
             catch (JsonException ex)
             {
-                Logger.Debug(ex, "Malformed NPM metadata JSON for {0}: {1}", purl, ex.Message);
-                return new Dictionary<PackageURL, double>();
+                Logger.Debug(
+                    "Malformed NPM metadata JSON for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
+                return Task.FromResult<IReadOnlyList<SourceRepositoryCandidate>>(candidates);
             }
-            return await SearchRepoUrlsInPackageMetadata(purl, contentJSON);
-        }
 
-#pragma warning disable CS1998 // Async method lacks 'await' operators and will run synchronously
-        protected async Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl,
-#pragma warning restore CS1998 // Async method lacks 'await' operators and will run synchronously
-            JsonDocument contentJSON)
-        {
-            Dictionary<PackageURL, double>? mapping = new();
-            if (purl.Name is string purlName && (purlName.StartsWith('_') || npm_internal_modules.Contains(purlName)))
+            using (contentJSON)
             {
-                // url = 'https://github.com/nodejs/node/tree/master/lib' + package.name,
+                JsonElement? versionJSON = string.IsNullOrEmpty(purl.Version)
+                    ? GetLatestVersionElement(contentJSON)
+                    : GetVersionElement(contentJSON, purl.Version);
+                if (versionJSON is not JsonElement selectedVersion)
+                {
+                    return Task.FromResult<IReadOnlyList<SourceRepositoryCandidate>>(candidates);
+                }
 
-                PackageURL curatedMapping = new(purl.Type, purl.Namespace, purl.Name, null, null, "node/tree/master/lib");
-                mapping.Add(
-                    curatedMapping,
-                    SourceRepositoryConfidencePolicy.Rank(
-                        purl,
-                        curatedMapping,
-                        new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.CuratedMapping)
-                        {
-                            IsRootPath = false,
-                        }));
-                return mapping;
+                string? metadataVersion = purl.Version ??
+                    OssUtilities.GetJSONPropertyStringIfExists(selectedVersion, "version");
+                PackageURL metadataPackage = new(
+                    purl.Type,
+                    purl.Namespace,
+                    purl.Name,
+                    metadataVersion,
+                    purl.Qualifiers,
+                    purl.Subpath);
+                candidates.AddRange(SourceRepositoryExtractor.CandidatesFromJson(
+                    metadataPackage,
+                    selectedVersion.GetRawText()));
             }
 
-            // if a version is provided, search that JSONElement, otherwise, just search the latest
-            // version, which is more likely best maintained
-            // TODO: If the latest version JSONElement doesnt have the repo infor, should we search all elements
-            // on that chance that one of them might have it?
-            JsonElement? versionJSON = string.IsNullOrEmpty(purl?.Version) ? GetLatestVersionElement(contentJSON) :
-                GetVersionElement(contentJSON, purl.Version);
-
-            if (versionJSON is JsonElement notNullVersionJSON)
-            {
-                try
-                {
-                    if (!notNullVersionJSON.TryGetProperty("repository", out JsonElement repository))
-                    {
-                        return mapping;
-                    }
-                    if (repository.ValueKind == JsonValueKind.Object)
-                    {
-                        string? repoURL = OssUtilities.GetJSONPropertyStringIfExists(repository, "url");
-
-                        // Normalize supported forge URLs consistently across package managers.
-                        if (repoURL is not null &&
-                            RepositoryUrlParser.TryParse(repoURL, out PackageURL? gitPURL))
-                        {
-                            // we got a repository value the author specified in the metadata - so no
-                            // further processing needed
-                            mapping[gitPURL!] = SourceRepositoryConfidencePolicy.Rank(
-                                purl,
-                                gitPURL!,
-                                new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.RequestedVersionAuthoritativeRepository)
-                                {
-                                    IsRootPath = string.IsNullOrEmpty(gitPURL!.Subpath),
-                                    IsMalformed = string.IsNullOrWhiteSpace(gitPURL.Namespace) || string.IsNullOrWhiteSpace(gitPURL.Name),
-                                });
-                            return mapping;
-                        }
-                    }
-                }
-                catch (KeyNotFoundException) { /* continue onwards */ }
-                catch (UriFormatException ex)
-                {
-                    // the uri specified in the metadata is invalid
-                    Logger.Debug(ex, "Invalid repository URL in NPM metadata for {0}: {1}", purl, ex.Message);
-                }
-                catch (MalformedPackageUrlException ex)
-                {
-                    // the repository url couldn't be turned into a valid github PackageURL
-                    Logger.Debug(ex, "Malformed repository URL in NPM metadata for {0}: {1}", purl, ex.Message);
-                }
-            }
-
-            return mapping;
+            return Task.FromResult<IReadOnlyList<SourceRepositoryCandidate>>(
+                new SourceRepositoryCandidateSet(candidates).Candidates);
         }
 
         /// <summary>

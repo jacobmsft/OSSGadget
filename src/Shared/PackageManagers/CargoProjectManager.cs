@@ -6,6 +6,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
     using Helpers;
     using Microsoft.CST.OpenSource.Contracts;
     using Microsoft.CST.OpenSource.Model;
+    using Microsoft.CST.OpenSource.Model.SourceMapping;
     using Microsoft.CST.OpenSource.PackageActions;
     using Microsoft.CST.OpenSource.Utilities;
     using Model.Enums;
@@ -291,12 +292,24 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             }
             catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.InternalServerError)
             {
-                Logger.Debug($"Max retries reached. Unable to get metadata for package: {purl}, error: {ex.Message}");
+                Logger.Debug(
+                    "Max retries reached fetching Cargo metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
                 throw;
             }
             catch (Exception ex)
             {
-                Logger.Debug(ex, "Error fetching Cargo metadata: {0}", ex.Message);
+                Logger.Debug(
+                    "Error fetching Cargo metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
                 throw;
             }
         }
@@ -365,9 +378,11 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             return metadata;
         }
 
-        protected override Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
+        public override Task<IReadOnlyList<SourceRepositoryCandidate>> SearchSourceRepositoryCandidatesInPackageMetadataAsync(
+            PackageURL purl,
+            string metadata)
         {
-            return Task.FromResult(SourceRepositoryExtractor.FromJson(purl, metadata));
+            return Task.FromResult(SourceRepositoryExtractor.CandidatesFromJson(purl, metadata));
         }
 
         public override Uri GetPackageAbsoluteUri(PackageURL purl)

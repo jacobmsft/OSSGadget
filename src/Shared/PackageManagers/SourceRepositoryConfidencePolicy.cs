@@ -2,6 +2,7 @@
 
 namespace Microsoft.CST.OpenSource.PackageManagers
 {
+    using Microsoft.CST.OpenSource.Model.SourceMapping;
     using PackageUrl;
     using System;
     using System.Collections.Generic;
@@ -11,7 +12,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
     /// Identifies the provenance of a source repository candidate. Numeric values are identifiers,
     /// not relative strengths; <see cref="SourceRepositoryConfidencePolicy"/> owns that ordering.
     /// </summary>
-    public enum SourceRepositoryEvidence
+    public enum SourceRepositoryConfidenceEvidence
     {
         RequestedVersionAuthoritativeRepository = 101,
         RequestedVersionExplicitSource = 211,
@@ -26,7 +27,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
     /// <summary>
     /// Narrow evidence adapter used until source candidates carry this information directly.
     /// </summary>
-    public sealed record SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence Evidence)
+    public sealed record SourceRepositoryEvidenceDescriptor(SourceRepositoryConfidenceEvidence Evidence)
     {
         public bool IsVerified { get; init; }
 
@@ -79,6 +80,15 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         }
 
         /// <summary>
+        /// Calculates confidence from the retained candidate evidence and verification metadata.
+        /// </summary>
+        public static double Rank(PackageURL package, SourceRepositoryCandidate candidate)
+        {
+            ArgumentNullException.ThrowIfNull(candidate);
+            return Rank(package, candidate.ToPackageUrl(), CreateDescriptor(package, candidate));
+        }
+
+        /// <summary>
         /// Ranks and deduplicates candidate evidence. The strongest evidence for a repository wins.
         /// </summary>
         public static IReadOnlyList<KeyValuePair<PackageURL, double>> RankCandidates(
@@ -95,24 +105,53 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 throw new ArgumentNullException(nameof(candidates));
             }
 
-            Dictionary<PackageURL, RankedEvidence> uniqueCandidates = new();
+            Dictionary<SourceRepositoryIdentity, RankedCandidate> uniqueCandidates = new();
             foreach ((PackageURL repository, SourceRepositoryEvidenceDescriptor evidence) in candidates)
             {
                 double score = Rank(package, repository, evidence);
                 RankedEvidence current = new(score, GetEvidenceStrength(evidence.Evidence), evidence.IsVerified);
-                if (!uniqueCandidates.TryGetValue(repository, out RankedEvidence existing) ||
-                    current.CompareTo(existing) > 0)
+                SourceRepositoryIdentity identity = new(repository);
+                if (!uniqueCandidates.TryGetValue(identity, out RankedCandidate existing) ||
+                    current.CompareTo(existing.Evidence) > 0)
                 {
-                    uniqueCandidates[repository] = current;
+                    uniqueCandidates[identity] = new RankedCandidate(repository, current);
                 }
             }
 
             return uniqueCandidates
-                .OrderByDescending(entry => entry.Value.Score)
-                .ThenByDescending(entry => entry.Value.EvidenceStrength)
-                .ThenByDescending(entry => entry.Value.IsVerified)
-                .ThenBy(entry => entry.Key.ToString(), StringComparer.Ordinal)
-                .Select(entry => new KeyValuePair<PackageURL, double>(entry.Key, entry.Value.Score))
+                .Select(entry => entry.Value)
+                .OrderByDescending(candidate => candidate.Evidence.Score)
+                .ThenByDescending(candidate => candidate.Evidence.EvidenceStrength)
+                .ThenByDescending(candidate => candidate.Evidence.IsVerified)
+                .ThenBy(candidate => candidate.Repository.ToString(), StringComparer.Ordinal)
+                .Select(candidate => new KeyValuePair<PackageURL, double>(
+                    candidate.Repository,
+                    candidate.Evidence.Score))
+                .ToList();
+        }
+
+        /// <summary>
+        /// Scores and deterministically orders evidence-rich candidates.
+        /// </summary>
+        public static IReadOnlyList<SourceRepositoryCandidate> RankCandidates(
+            PackageURL package,
+            IEnumerable<SourceRepositoryCandidate> candidates)
+        {
+            ArgumentNullException.ThrowIfNull(package);
+            ArgumentNullException.ThrowIfNull(candidates);
+
+            return new SourceRepositoryCandidateSet(candidates)
+                .Candidates
+                .Select(candidate => new
+                {
+                    Candidate = candidate.WithConfidence(Rank(package, candidate)),
+                    Descriptor = CreateDescriptor(package, candidate),
+                })
+                .OrderByDescending(entry => entry.Candidate.Confidence)
+                .ThenByDescending(entry => GetEvidenceStrength(entry.Descriptor.Evidence))
+                .ThenByDescending(entry => entry.Descriptor.IsVerified)
+                .ThenBy(entry => entry.Candidate.ToPackageUrl().ToString(), StringComparer.Ordinal)
+                .Select(entry => entry.Candidate)
                 .ToList();
         }
 
@@ -135,34 +174,34 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         /// <summary>
         /// Returns the policy-owned ordering of evidence categories.
         /// </summary>
-        public static int GetEvidenceStrength(SourceRepositoryEvidence evidence)
+        public static int GetEvidenceStrength(SourceRepositoryConfidenceEvidence evidence)
         {
             return evidence switch
             {
-                SourceRepositoryEvidence.RequestedVersionAuthoritativeRepository => 800,
-                SourceRepositoryEvidence.CuratedMapping => 750,
-                SourceRepositoryEvidence.RequestedVersionExplicitSource => 700,
-                SourceRepositoryEvidence.LabeledProjectUrl => 600,
-                SourceRepositoryEvidence.HistoricalVersionAuthoritativeRepository => 500,
-                SourceRepositoryEvidence.HomepageOrDownloadInference => 400,
-                SourceRepositoryEvidence.RawMetadataExtraction => 300,
-                SourceRepositoryEvidence.NameInference => 200,
+                SourceRepositoryConfidenceEvidence.RequestedVersionAuthoritativeRepository => 800,
+                SourceRepositoryConfidenceEvidence.CuratedMapping => 750,
+                SourceRepositoryConfidenceEvidence.RequestedVersionExplicitSource => 700,
+                SourceRepositoryConfidenceEvidence.LabeledProjectUrl => 600,
+                SourceRepositoryConfidenceEvidence.HistoricalVersionAuthoritativeRepository => 500,
+                SourceRepositoryConfidenceEvidence.HomepageOrDownloadInference => 400,
+                SourceRepositoryConfidenceEvidence.RawMetadataExtraction => 300,
+                SourceRepositoryConfidenceEvidence.NameInference => 200,
                 _ => throw new ArgumentOutOfRangeException(nameof(evidence), evidence, "Unknown source repository evidence."),
             };
         }
 
-        private static double GetBaseScore(SourceRepositoryEvidence evidence)
+        private static double GetBaseScore(SourceRepositoryConfidenceEvidence evidence)
         {
             return evidence switch
             {
-                SourceRepositoryEvidence.RequestedVersionAuthoritativeRepository => 0.99,
-                SourceRepositoryEvidence.CuratedMapping => 0.98,
-                SourceRepositoryEvidence.RequestedVersionExplicitSource => 0.95,
-                SourceRepositoryEvidence.LabeledProjectUrl => 0.90,
-                SourceRepositoryEvidence.HistoricalVersionAuthoritativeRepository => 0.84,
-                SourceRepositoryEvidence.HomepageOrDownloadInference => 0.74,
-                SourceRepositoryEvidence.RawMetadataExtraction => 0.60,
-                SourceRepositoryEvidence.NameInference => 0.48,
+                SourceRepositoryConfidenceEvidence.RequestedVersionAuthoritativeRepository => 0.99,
+                SourceRepositoryConfidenceEvidence.CuratedMapping => 0.98,
+                SourceRepositoryConfidenceEvidence.RequestedVersionExplicitSource => 0.95,
+                SourceRepositoryConfidenceEvidence.LabeledProjectUrl => 0.90,
+                SourceRepositoryConfidenceEvidence.HistoricalVersionAuthoritativeRepository => 0.84,
+                SourceRepositoryConfidenceEvidence.HomepageOrDownloadInference => 0.74,
+                SourceRepositoryConfidenceEvidence.RawMetadataExtraction => 0.60,
+                SourceRepositoryConfidenceEvidence.NameInference => 0.48,
                 _ => throw new ArgumentOutOfRangeException(nameof(evidence), evidence, "Unknown source repository evidence."),
             };
         }
@@ -191,6 +230,62 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             return new string(name.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
         }
 
+        private static SourceRepositoryEvidenceDescriptor CreateDescriptor(
+            PackageURL package,
+            SourceRepositoryCandidate candidate)
+        {
+            SourceRepositoryConfidenceEvidence strongestEvidence = candidate.Evidence
+                .Select(evidence => MapEvidence(package, evidence))
+                .OrderByDescending(GetEvidenceStrength)
+                .FirstOrDefault(SourceRepositoryConfidenceEvidence.RawMetadataExtraction);
+
+            return new SourceRepositoryEvidenceDescriptor(strongestEvidence)
+            {
+                IsVerified = candidate.VerificationStatus == SourceRepositoryVerificationStatus.Verified,
+                IsAmbiguous = candidate.Warnings.Any(warning =>
+                    warning.Kind == SourceRepositoryWarningKind.Ambiguous),
+                IsFork = candidate.Relationships.HasFlag(SourceRepositoryRelationship.Fork),
+                IsUpstream = candidate.Relationships.HasFlag(SourceRepositoryRelationship.Upstream),
+                IsRootPath = string.IsNullOrWhiteSpace(candidate.Identity.Subpath),
+                IsMalformed = candidate.Warnings.Any(warning =>
+                    warning.Kind == SourceRepositoryWarningKind.Malformed),
+            };
+        }
+
+        private static SourceRepositoryConfidenceEvidence MapEvidence(
+            PackageURL package,
+            Microsoft.CST.OpenSource.Model.SourceMapping.SourceRepositoryEvidence evidence)
+        {
+            bool isHistorical =
+                !string.IsNullOrWhiteSpace(package.Version) &&
+                !string.IsNullOrWhiteSpace(evidence.MetadataPackageVersion) &&
+                !string.Equals(
+                    package.Version,
+                    evidence.MetadataPackageVersion,
+                    StringComparison.OrdinalIgnoreCase);
+
+            return evidence.Kind switch
+            {
+                SourceRepositoryEvidenceKind.RegistryRepository =>
+                    isHistorical
+                        ? SourceRepositoryConfidenceEvidence.HistoricalVersionAuthoritativeRepository
+                        : SourceRepositoryConfidenceEvidence.RequestedVersionAuthoritativeRepository,
+                SourceRepositoryEvidenceKind.RegistrySource =>
+                    isHistorical
+                        ? SourceRepositoryConfidenceEvidence.HistoricalVersionAuthoritativeRepository
+                        : SourceRepositoryConfidenceEvidence.RequestedVersionExplicitSource,
+                SourceRepositoryEvidenceKind.RegistryProjectUrl =>
+                    SourceRepositoryConfidenceEvidence.LabeledProjectUrl,
+                SourceRepositoryEvidenceKind.Homepage or SourceRepositoryEvidenceKind.DownloadUrl =>
+                    SourceRepositoryConfidenceEvidence.HomepageOrDownloadInference,
+                SourceRepositoryEvidenceKind.RepositorySearch or SourceRepositoryEvidenceKind.NameInference =>
+                    SourceRepositoryConfidenceEvidence.NameInference,
+                SourceRepositoryEvidenceKind.BuiltInMapping =>
+                    SourceRepositoryConfidenceEvidence.CuratedMapping,
+                _ => SourceRepositoryConfidenceEvidence.RawMetadataExtraction,
+            };
+        }
+
         private readonly record struct RankedEvidence(double Score, int EvidenceStrength, bool IsVerified) : IComparable<RankedEvidence>
         {
             public int CompareTo(RankedEvidence other)
@@ -205,5 +300,9 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 return comparison != 0 ? comparison : IsVerified.CompareTo(other.IsVerified);
             }
         }
+
+        private readonly record struct RankedCandidate(
+            PackageURL Repository,
+            RankedEvidence Evidence);
     }
 }

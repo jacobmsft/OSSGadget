@@ -2,6 +2,7 @@
 
 namespace Microsoft.CST.OpenSource.Model.SourceMapping;
 
+using Microsoft.CST.OpenSource.Helpers;
 using PackageUrl;
 using System;
 
@@ -63,20 +64,7 @@ public sealed class SourceRepositoryIdentity : IEquatable<SourceRepositoryIdenti
 
     private static Uri? CreateCanonicalUri(PackageURL repositoryPurl)
     {
-        string? host = GetDefaultHost(repositoryPurl.Type);
-        if (string.IsNullOrWhiteSpace(host) ||
-            string.IsNullOrWhiteSpace(repositoryPurl.Namespace) ||
-            string.IsNullOrWhiteSpace(repositoryPurl.Name))
-        {
-            return null;
-        }
-
-        return Uri.TryCreate(
-            $"https://{host}/{repositoryPurl.Namespace}/{repositoryPurl.Name}",
-            UriKind.Absolute,
-            out Uri? canonicalUri)
-            ? canonicalUri
-            : null;
+        return RepositoryUrlParser.GetRepositoryUri(repositoryPurl);
     }
 
     private static string? GetDefaultHost(string? repositoryType)
@@ -118,7 +106,9 @@ public sealed class SourceRepositoryIdentity : IEquatable<SourceRepositoryIdenti
         UriBuilder builder = new(uri)
         {
             UserName = string.Empty,
-            Password = string.Empty
+            Password = string.Empty,
+            Query = string.Empty,
+            Fragment = string.Empty,
         };
         return builder.Uri;
     }

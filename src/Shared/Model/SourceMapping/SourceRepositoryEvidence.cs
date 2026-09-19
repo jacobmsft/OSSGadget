@@ -27,7 +27,7 @@ public sealed record SourceRepositoryEvidence
     {
         Kind = kind;
         SourceField = sourceField;
-        RawValue = Sanitize(rawValue);
+        RawValue = SanitizeSensitiveText(rawValue);
         MetadataPackageVersion = metadataPackageVersion;
     }
 
@@ -39,7 +39,10 @@ public sealed record SourceRepositoryEvidence
 
     public string? MetadataPackageVersion { get; }
 
-    internal static string? Sanitize(string? value)
+    /// <summary>
+    /// Removes URL credentials and common secret-bearing query values from retained diagnostics.
+    /// </summary>
+    public static string? SanitizeSensitiveText(string? value)
     {
         if (value is null)
         {

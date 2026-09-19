@@ -10,7 +10,7 @@ public sealed record SourceRepositoryWarning
     public SourceRepositoryWarning(SourceRepositoryWarningKind kind, string? detail = null)
     {
         Kind = kind;
-        Detail = SourceRepositoryEvidence.Sanitize(detail);
+        Detail = SourceRepositoryEvidence.SanitizeSensitiveText(detail);
     }
 
     public SourceRepositoryWarningKind Kind { get; }

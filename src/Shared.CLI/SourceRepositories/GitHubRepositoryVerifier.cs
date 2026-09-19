@@ -2,6 +2,7 @@
 
 namespace Microsoft.CST.OpenSource.SourceRepositories;
 
+using Microsoft.CST.OpenSource.Model.SourceMapping;
 using Octokit;
 using PackageUrl;
 using System;
@@ -68,7 +69,7 @@ public sealed class GitHubRepositoryVerifier : IRepositoryVerifier
         {
             return new RepositoryVerification(repository, RepositoryVerificationStatus.Rejected);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             throw;
         }
@@ -77,7 +78,7 @@ public sealed class GitHubRepositoryVerifier : IRepositoryVerifier
             return new RepositoryVerification(
                 repository,
                 RepositoryVerificationStatus.Inconclusive,
-                failureReason: ex.Message);
+                failureReason: SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
         }
     }
 }

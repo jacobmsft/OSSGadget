@@ -3,6 +3,7 @@
 namespace Microsoft.CST.OpenSource.PackageManagers
 {
     using Helpers;
+    using Microsoft.CST.OpenSource.Model.SourceMapping;
     using Microsoft.CST.OpenSource.PackageManagers.CPAN;
     using PackageUrl;
     using System;
@@ -166,9 +167,17 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                     return "";
                 }
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                Logger.Debug(ex, "Error fetching CPAN metadata: {0}", ex.Message);
+                Logger.Debug(
+                    "Error fetching CPAN metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
                 return null;
             }
         }
@@ -180,14 +189,14 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             // TODO: Add version support
         }
 
-        protected override Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
+        public override Task<IReadOnlyList<SourceRepositoryCandidate>> SearchSourceRepositoryCandidatesInPackageMetadataAsync(
+            PackageURL purl,
+            string metadata)
         {
-            Dictionary<PackageURL, double> result = SourceRepositoryExtractor.FromJson(purl, metadata);
-            foreach (KeyValuePair<PackageURL, double> candidate in SourceRepositoryExtractor.FromExplicitTextFields(purl, metadata))
-            {
-                result[candidate.Key] = candidate.Value;
-            }
-            return Task.FromResult(result);
+            SourceRepositoryCandidateSet result = new(
+                SourceRepositoryExtractor.CandidatesFromJson(purl, metadata)
+                    .Concat(SourceRepositoryExtractor.CandidatesFromExplicitTextFields(purl, metadata)));
+            return Task.FromResult(result.Candidates);
         }
     }
 }

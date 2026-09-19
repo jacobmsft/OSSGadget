@@ -2,6 +2,7 @@
 
 namespace Microsoft.CST.OpenSource.Model
 {
+    using Microsoft.CST.OpenSource.Helpers;
     using Newtonsoft.Json;
     using Octokit;
     using PackageUrl;
@@ -100,9 +101,14 @@ namespace Microsoft.CST.OpenSource.Model
         {
             if (purl is not null && purl.ToString() is string purlString && !string.IsNullOrWhiteSpace(purlString))
             {
-                if (purl.Type != "github")
+                Type ??= purl.Type;
+                Name ??= purl.Name;
+                Purl ??= purlString;
+                Uri ??= RepositoryUrlParser.GetRepositoryUri(purl)?.ToString().TrimEnd('/');
+
+                if (!string.Equals(purl.Type, "github", StringComparison.OrdinalIgnoreCase))
                 {
-                    Logger.Debug("Only github repos are handled currently");
+                    Logger.Debug("Provider-specific repository enrichment is only available for GitHub.");
                     return this;
                 }
 

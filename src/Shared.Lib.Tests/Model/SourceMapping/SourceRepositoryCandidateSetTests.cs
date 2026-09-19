@@ -154,7 +154,7 @@ public class SourceRepositoryCandidateSetTests
     }
 
     [Fact]
-    public async Task SourceMappingFlowRetainsEvidenceAndPreservesLegacyResult()
+    public async Task SourceMappingFlowRetainsEvidenceAndAppliesConfidencePolicy()
     {
         PackageURL packagePurl = new("npm", null, "example", "2.0.0", null, null);
         ProjectManagerFactory factory = new(new Dictionary<string, ProjectManagerFactory.ConstructProjectManager>
@@ -177,7 +177,7 @@ public class SourceRepositoryCandidateSetTests
             await findSourceTool.FindSourceAsync(packagePurl));
 
         Assert.Equal("pkg:github/owner/repository", compatibilityResult.Key.ToString());
-        Assert.Equal(0.9, compatibilityResult.Value);
+        Assert.Equal(0.92, compatibilityResult.Value, precision: 2);
     }
 
     private sealed class TestProjectManager : BaseProjectManager
@@ -197,7 +197,7 @@ public class SourceRepositoryCandidateSetTests
             return Task.FromResult<string?>("{}");
         }
 
-        protected override Task<IReadOnlyList<SourceRepositoryCandidate>> SearchSourceRepositoryCandidatesInPackageMetadataAsync(
+        public override Task<IReadOnlyList<SourceRepositoryCandidate>> SearchSourceRepositoryCandidatesInPackageMetadataAsync(
             PackageURL purl,
             string metadata)
         {

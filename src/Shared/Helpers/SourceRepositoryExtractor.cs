@@ -2,6 +2,7 @@
 
 namespace Microsoft.CST.OpenSource.Helpers;
 
+using Microsoft.CST.OpenSource.Model.SourceMapping;
 using PackageUrl;
 using System;
 using System.Collections.Generic;
@@ -31,12 +32,33 @@ public static class SourceRepositoryExtractor
         "git",
     };
 
+    private static readonly string[] SourceVersionKeys =
+    {
+        "gitHead",
+        "reference",
+        "commit",
+        "revision",
+        "tag",
+        "branch",
+    };
+
+    private static readonly string[] RootSourceVersionKeys =
+    {
+        "gitHead",
+    };
+
+    private static readonly string[] RepositorySubpathKeys =
+    {
+        "directory",
+        "subpath",
+    };
+
     private static readonly Regex ExplicitTextFieldRegex = new(
-        @"(?im)^\s*(?:Vcs-(?:Git|Browser)|Source-(?:Repository|URL)|Repository)\s*:\s*(?<url>\S+)",
+        @"(?im)^\s*(?<field>Vcs-(?:Git|Browser)|Source-(?:Repository|URL)|Repository)\s*:\s*(?<value>[^\r\n]+)",
         RegexOptions.Compiled);
 
     private static readonly Regex ExplicitJsonUrlRegex = new(
-        "(?i)\"(?:git|repository_url|source_repository_url)\"\\s*:\\s*\"(?<url>[^\"]+)\"",
+        "(?i)\"(?<field>git|repository_url|source_repository_url)\"\\s*:\\s*\"(?<url>[^\"]+)\"",
         RegexOptions.Compiled);
 
     /// <summary>
@@ -45,7 +67,18 @@ public static class SourceRepositoryExtractor
     /// </summary>
     public static Dictionary<PackageURL, double> FromJson(PackageURL package, string metadata)
     {
-        Dictionary<PackageURL, double> result = new();
+        return new SourceRepositoryCandidateSet(CandidatesFromJson(package, metadata))
+            .ToCompatibilityDictionary();
+    }
+
+    /// <summary>
+    /// Extracts evidence-rich candidates from authoritative JSON repository/VCS fields.
+    /// </summary>
+    public static IReadOnlyList<SourceRepositoryCandidate> CandidatesFromJson(
+        PackageURL package,
+        string metadata)
+    {
+        List<SourceRepositoryCandidate> result = new();
         if (string.IsNullOrWhiteSpace(metadata))
         {
             return result;
@@ -54,7 +87,14 @@ public static class SourceRepositoryExtractor
         try
         {
             using JsonDocument document = JsonDocument.Parse(metadata);
-            VisitJson(package, document.RootElement, result, isAuthoritativeContext: false);
+            VisitJson(
+                package,
+                document.RootElement,
+                result,
+                null,
+                SourceRepositoryEvidenceKind.Unknown,
+                null,
+                null);
         }
         catch (JsonException)
         {
@@ -66,7 +106,14 @@ public static class SourceRepositoryExtractor
                 try
                 {
                     using JsonDocument document = JsonDocument.Parse(line.Trim());
-                    VisitJson(package, document.RootElement, result, isAuthoritativeContext: false);
+                    VisitJson(
+                        package,
+                        document.RootElement,
+                        result,
+                        null,
+                        SourceRepositoryEvidenceKind.Unknown,
+                        null,
+                        null);
                 }
                 catch (JsonException)
                 {
@@ -76,10 +123,11 @@ public static class SourceRepositoryExtractor
 
             foreach (Match match in ExplicitJsonUrlRegex.Matches(metadata))
             {
-                AddUrl(package, match.Groups["url"].Value, result);
+                string field = match.Groups["field"].Value;
+                AddUrl(package, match.Groups["url"].Value, field, GetEvidenceKind(field), result);
             }
         }
-        return result;
+        return new SourceRepositoryCandidateSet(result).Candidates;
     }
 
     /// <summary>
@@ -87,7 +135,18 @@ public static class SourceRepositoryExtractor
     /// </summary>
     public static Dictionary<PackageURL, double> FromXml(PackageURL package, string metadata)
     {
-        Dictionary<PackageURL, double> result = new();
+        return new SourceRepositoryCandidateSet(CandidatesFromXml(package, metadata))
+            .ToCompatibilityDictionary();
+    }
+
+    /// <summary>
+    /// Extracts evidence-rich candidates from Maven-style SCM XML.
+    /// </summary>
+    public static IReadOnlyList<SourceRepositoryCandidate> CandidatesFromXml(
+        PackageURL package,
+        string metadata)
+    {
+        List<SourceRepositoryCandidate> result = new();
         if (string.IsNullOrWhiteSpace(metadata))
         {
             return result;
@@ -96,17 +155,29 @@ public static class SourceRepositoryExtractor
         XDocument document = XDocument.Parse(metadata);
         foreach (XElement scm in document.Descendants().Where(element => element.Name.LocalName.Equals("scm", StringComparison.OrdinalIgnoreCase)))
         {
+            string? sourceVersion = scm
+                .Elements()
+                .FirstOrDefault(element =>
+                    element.Name.LocalName.Equals("tag", StringComparison.OrdinalIgnoreCase))
+                ?.Value
+                .Trim();
             foreach (XElement child in scm.Elements())
             {
                 if (child.Name.LocalName.Equals("url", StringComparison.OrdinalIgnoreCase) ||
                     child.Name.LocalName.Equals("connection", StringComparison.OrdinalIgnoreCase) ||
                     child.Name.LocalName.Equals("developerConnection", StringComparison.OrdinalIgnoreCase))
                 {
-                    AddUrl(package, child.Value, result);
+                    AddUrl(
+                        package,
+                        child.Value,
+                        $"scm.{child.Name.LocalName}",
+                        SourceRepositoryEvidenceKind.RegistryRepository,
+                        result,
+                        sourceVersion);
                 }
             }
         }
-        return result;
+        return new SourceRepositoryCandidateSet(result).Candidates;
     }
 
     /// <summary>
@@ -114,7 +185,18 @@ public static class SourceRepositoryExtractor
     /// </summary>
     public static Dictionary<PackageURL, double> FromExplicitTextFields(PackageURL package, string metadata)
     {
-        Dictionary<PackageURL, double> result = new();
+        return new SourceRepositoryCandidateSet(CandidatesFromExplicitTextFields(package, metadata))
+            .ToCompatibilityDictionary();
+    }
+
+    /// <summary>
+    /// Extracts evidence-rich candidates from explicit source-control text fields.
+    /// </summary>
+    public static IReadOnlyList<SourceRepositoryCandidate> CandidatesFromExplicitTextFields(
+        PackageURL package,
+        string metadata)
+    {
+        List<SourceRepositoryCandidate> result = new();
         if (string.IsNullOrWhiteSpace(metadata))
         {
             return result;
@@ -122,118 +204,215 @@ public static class SourceRepositoryExtractor
 
         foreach (Match match in ExplicitTextFieldRegex.Matches(metadata))
         {
-            AddUrl(package, match.Groups["url"].Value.TrimEnd(';', ','), result);
+            string field = match.Groups["field"].Value;
+            string fieldValue = match.Groups["value"].Value.Trim().TrimEnd(';', ',');
+            string[] parts = fieldValue.Split(
+                (char[]?)null,
+                StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+            {
+                continue;
+            }
+
+            string? sourceVersion = null;
+            for (int index = 1; index + 1 < parts.Length; index++)
+            {
+                if (parts[index].Equals("-b", StringComparison.Ordinal))
+                {
+                    sourceVersion = parts[index + 1];
+                    break;
+                }
+            }
+
+            AddUrl(
+                package,
+                parts[0],
+                field,
+                GetEvidenceKind(field),
+                result,
+                sourceVersion);
         }
-        return result;
+        return new SourceRepositoryCandidateSet(result).Candidates;
     }
 
     private static void VisitJson(
         PackageURL package,
         JsonElement element,
-        Dictionary<PackageURL, double> result,
-        bool isAuthoritativeContext)
+        List<SourceRepositoryCandidate> result,
+        string? authoritativeField,
+        SourceRepositoryEvidenceKind evidenceKind,
+        string? inheritedSourceVersion,
+        string? inheritedSubpath)
     {
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
+                string? sourceVersion =
+                    GetFirstStringProperty(
+                        element,
+                        authoritativeField is null ? RootSourceVersionKeys : SourceVersionKeys) ??
+                    inheritedSourceVersion;
+                string? subpath = authoritativeField is null
+                    ? inheritedSubpath
+                    : GetFirstStringProperty(element, RepositorySubpathKeys) ?? inheritedSubpath;
                 foreach (JsonProperty property in element.EnumerateObject())
                 {
-                    bool authoritative = isAuthoritativeContext || RepositoryKeys.Contains(property.Name);
-                    if (authoritative && property.Value.ValueKind == JsonValueKind.String)
+                    bool startsAuthoritativeContext =
+                        authoritativeField is null &&
+                        RepositoryKeys.Contains(property.Name);
+                    string? sourceField = startsAuthoritativeContext
+                        ? property.Name
+                        : authoritativeField is null
+                            ? null
+                            : $"{authoritativeField}.{property.Name}";
+                    SourceRepositoryEvidenceKind propertyEvidenceKind = startsAuthoritativeContext
+                        ? GetEvidenceKind(property.Name)
+                        : evidenceKind;
+
+                    if (sourceField is not null && property.Value.ValueKind == JsonValueKind.String)
                     {
-                        AddUrl(package, property.Value.GetString(), result);
+                        AddUrl(
+                            package,
+                            property.Value.GetString(),
+                            sourceField,
+                            propertyEvidenceKind,
+                            result,
+                            sourceVersion,
+                            subpath);
                     }
                     else
                     {
-                        VisitJson(package, property.Value, result, authoritative);
+                        VisitJson(
+                            package,
+                            property.Value,
+                            result,
+                            sourceField,
+                            propertyEvidenceKind,
+                            sourceVersion,
+                            subpath);
                     }
                 }
                 break;
             case JsonValueKind.Array:
                 foreach (JsonElement child in element.EnumerateArray())
                 {
-                    VisitJson(package, child, result, isAuthoritativeContext);
+                    VisitJson(
+                        package,
+                        child,
+                        result,
+                        authoritativeField,
+                        evidenceKind,
+                        inheritedSourceVersion,
+                        inheritedSubpath);
                 }
                 break;
-            case JsonValueKind.String when isAuthoritativeContext:
-                AddUrl(package, element.GetString(), result);
+            case JsonValueKind.String when authoritativeField is not null:
+                AddUrl(
+                    package,
+                    element.GetString(),
+                    authoritativeField,
+                    evidenceKind,
+                    result,
+                    inheritedSourceVersion,
+                    inheritedSubpath);
                 break;
         }
     }
 
-    private static void AddUrl(PackageURL package, string? rawUrl, Dictionary<PackageURL, double> result)
+    private static void AddUrl(
+        PackageURL package,
+        string? rawUrl,
+        string sourceField,
+        SourceRepositoryEvidenceKind evidenceKind,
+        List<SourceRepositoryCandidate> result,
+        string? sourceVersion = null,
+        string? repositorySubpath = null)
     {
         if (string.IsNullOrWhiteSpace(rawUrl))
         {
             return;
         }
 
-        string value = rawUrl.Trim().Trim('"', '\'');
-        if (value.StartsWith("scm:", StringComparison.OrdinalIgnoreCase))
+        if (!RepositoryUrlParser.TryParseRepository(
+                rawUrl.Trim().Trim('"', '\''),
+                allowGenericHosts: true,
+                out RepositoryUrlParseResult? parsed) ||
+            parsed is null)
         {
-            value = value[(value.IndexOf(':') + 1)..];
-            int separator = value.IndexOf(':');
-            if (separator >= 0)
+            return;
+        }
+
+        string? normalizedSubpath = NormalizeSubpath(repositorySubpath);
+        PackageURL repositoryPurl = new(
+            parsed.PackageUrl.Type,
+            parsed.PackageUrl.Namespace,
+            parsed.PackageUrl.Name,
+            null,
+            null,
+            parsed.PackageUrl.Subpath ?? normalizedSubpath);
+        result.Add(new SourceRepositoryCandidate(
+            new SourceRepositoryIdentity(repositoryPurl, parsed.CanonicalUri),
+            new[]
             {
-                value = value[(separator + 1)..];
+                new SourceRepositoryEvidence(
+                    evidenceKind,
+                    sourceField,
+                    rawUrl,
+                    package.Version)
+            },
+            1.0,
+            package.Version,
+            parsed.PackageUrl.Version ?? NormalizeSourceVersion(sourceVersion),
+            parsed.PackageUrl.Qualifiers));
+    }
+
+    private static string? GetFirstStringProperty(JsonElement element, IEnumerable<string> propertyNames)
+    {
+        foreach (string propertyName in propertyNames)
+        {
+            foreach (JsonProperty property in element.EnumerateObject())
+            {
+                if (property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase) &&
+                    property.Value.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrWhiteSpace(property.Value.GetString()))
+                {
+                    return property.Value.GetString();
+                }
             }
         }
-        if (value.StartsWith("git+", StringComparison.OrdinalIgnoreCase))
+
+        return null;
+    }
+
+    private static string? NormalizeSourceVersion(string? sourceVersion)
+    {
+        return string.IsNullOrWhiteSpace(sourceVersion)
+            ? null
+            : sourceVersion.Trim().Trim('"', '\'');
+    }
+
+    private static string? NormalizeSubpath(string? subpath)
+    {
+        if (string.IsNullOrWhiteSpace(subpath))
         {
-            value = value[4..];
-        }
-        if (value.StartsWith("git@", StringComparison.OrdinalIgnoreCase))
-        {
-            value = "ssh://" + value;
-        }
-        if (!Uri.TryCreate(value, UriKind.Absolute, out Uri? uri) ||
-            !uri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) &&
-            !uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) &&
-            !uri.Scheme.Equals("ssh", StringComparison.OrdinalIgnoreCase) &&
-            !uri.Scheme.Equals("git", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
+            return null;
         }
 
-        string host = uri.Host.ToLowerInvariant();
-        string[] segments = uri.AbsolutePath
-            .Split('/', StringSplitOptions.RemoveEmptyEntries)
-            .Where(segment => !segment.Equals("tree", StringComparison.OrdinalIgnoreCase) &&
-                              !segment.Equals("blob", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        if (segments.Length == 0)
-        {
-            return;
-        }
+        string[] segments = subpath
+            .Trim()
+            .Trim('"', '\'')
+            .Replace('\\', '/')
+            .Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length == 0 ||
+            segments.Any(segment => segment is "." or "..")
+            ? null
+            : string.Join('/', segments);
+    }
 
-        string type;
-        if (host is "github.com" or "www.github.com")
-        {
-            type = "github";
-        }
-        else if (host is "gitlab.com" or "www.gitlab.com")
-        {
-            type = "gitlab";
-        }
-        else if (host is "bitbucket.org" or "www.bitbucket.org")
-        {
-            type = "bitbucket";
-        }
-        else
-        {
-            type = "generic";
-        }
-
-        string name = segments[^1].EndsWith(".git", StringComparison.OrdinalIgnoreCase)
-            ? segments[^1][..^4]
-            : segments[^1];
-        string? @namespace = segments.Length > 1
-            ? string.Join('/', segments[..^1])
-            : host;
-        PackageURL repository = new(type, @namespace, name, null, null, null);
-        if (!result.Keys.Any(existing => existing.ToString().Equals(repository.ToString(), StringComparison.OrdinalIgnoreCase)))
-        {
-            result[repository] = 1.0;
-        }
+    private static SourceRepositoryEvidenceKind GetEvidenceKind(string sourceField)
+    {
+        return sourceField.Contains("source", StringComparison.OrdinalIgnoreCase)
+            ? SourceRepositoryEvidenceKind.RegistrySource
+            : SourceRepositoryEvidenceKind.RegistryRepository;
     }
 }

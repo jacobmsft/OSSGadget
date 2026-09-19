@@ -150,6 +150,15 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         }
 
         /// <summary>
+        /// Returns whether this factory can construct a project manager for the package type.
+        /// </summary>
+        public bool SupportsPackageType(string? packageType)
+        {
+            return !string.IsNullOrWhiteSpace(packageType) &&
+                _projectManagers.ContainsKey(packageType);
+        }
+
+        /// <summary>
         /// Add static method to just get a <see cref="BaseProjectManager"/> implementation.
         /// </summary>
         /// <param name="packageUrl">The <see cref="PackageURL"/> to get a project manager for.</param>

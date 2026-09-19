@@ -71,6 +71,40 @@ public sealed class SourceRepositoryCandidate
             Identity.Subpath);
     }
 
+    public SourceRepositoryCandidate WithConfidence(double confidence)
+    {
+        return new SourceRepositoryCandidate(
+            Identity,
+            Evidence,
+            confidence,
+            PackageVersion,
+            SourceVersion,
+            SourceQualifiers,
+            VerificationStatus,
+            Warnings,
+            Relationships,
+            UpstreamIdentity);
+    }
+
+    public SourceRepositoryCandidate WithVerification(
+        SourceRepositoryVerificationStatus verificationStatus,
+        IEnumerable<SourceRepositoryWarning>? warnings = null,
+        SourceRepositoryRelationship relationships = SourceRepositoryRelationship.None,
+        SourceRepositoryIdentity? upstreamIdentity = null)
+    {
+        return new SourceRepositoryCandidate(
+            Identity,
+            Evidence,
+            Confidence,
+            PackageVersion,
+            SourceVersion,
+            SourceQualifiers,
+            verificationStatus,
+            Warnings.Concat(warnings ?? Array.Empty<SourceRepositoryWarning>()),
+            Relationships | relationships,
+            upstreamIdentity ?? UpstreamIdentity);
+    }
+
     internal SourceRepositoryCandidate Merge(SourceRepositoryCandidate other)
     {
         if (!Identity.Equals(other.Identity))

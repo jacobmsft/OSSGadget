@@ -156,6 +156,13 @@ public interface IBaseProjectManager
         bool useCache = true);
 
     /// <summary>
+    /// Extracts ecosystem-specific repository candidates from already-fetched package metadata.
+    /// </summary>
+    public Task<IReadOnlyList<SourceRepositoryCandidate>> SearchSourceRepositoryCandidatesInPackageMetadataAsync(
+        PackageURL purl,
+        string metadata);
+
+    /// <summary>
     /// Tries to find out the package repository from the metadata of the package. Check with
     /// the specific package manager, if they have any specific extraction to do, w.r.t the
     /// metadata. If they found some package specific well defined metadata, use that. If that

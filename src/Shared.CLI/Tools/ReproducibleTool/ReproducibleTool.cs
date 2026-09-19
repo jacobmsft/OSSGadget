@@ -215,29 +215,56 @@ namespace Microsoft.CST.OpenSource
                     Dictionary<PackageURL, double>? sourceMap = await findSourceTool.FindSourceAsync(purl);
                     if (sourceMap.Any())
                     {
-                        PackageURL? bestSourcePurl = sourceMap
+                        Console.WriteLine("Downloading source...");
+                        downloadResults = new List<string>();
+                        IEnumerable<PackageURL> orderedSourcePurls = sourceMap
                             .OrderByDescending(result => result.Value)
                             .ThenBy(result => result.Key.ToString(), StringComparer.OrdinalIgnoreCase)
                             .ThenBy(result => result.Key.ToString(), StringComparer.Ordinal)
-                            .First().Key;
-                        sourceRepositorySubpath = bestSourcePurl.Subpath;
-                        Logger.Debug("Identified best source code repository: {0}", bestSourcePurl);
+                            .Select(result => result.Key);
 
-                        // Download the source
-                        Console.WriteLine("Downloading source...");
-                        foreach (string reference in GetSourceReferences(
-                            bestSourcePurl.Version,
-                            reproducibleToolOptions.OverrideSourceReference))
+                        foreach (PackageURL sourcePurl in orderedSourcePurls)
                         {
-                            Logger.Debug("Trying to download package, version/reference [{0}].", reference);
-                            PackageURL? purlRef = new PackageURL(bestSourcePurl.Type, bestSourcePurl.Namespace, bestSourcePurl.Name, reference, bestSourcePurl.Qualifiers, bestSourcePurl.Subpath);
-                            packageDownloader = new PackageDownloader(purlRef, ProjectManagerFactory, Path.Join(tempDirectoryName, "src"));
-                            downloadResults = await packageDownloader.DownloadPackageLocalCopy(purlRef, false, true);
+                            if (!ProjectManagerFactory.SupportsPackageType(sourcePurl.Type))
+                            {
+                                Logger.Debug(
+                                    "Skipping unsupported source repository provider [{0}] for {1}.",
+                                    sourcePurl.Type,
+                                    sourcePurl);
+                                continue;
+                            }
+
+                            Logger.Debug("Trying source code repository: {0}", sourcePurl);
+                            foreach (string reference in GetSourceReferences(
+                                sourcePurl.Version,
+                                reproducibleToolOptions.OverrideSourceReference))
+                            {
+                                Logger.Debug("Trying to download source, version/reference [{0}].", reference);
+                                PackageURL purlRef = new(
+                                    sourcePurl.Type,
+                                    sourcePurl.Namespace,
+                                    sourcePurl.Name,
+                                    reference,
+                                    sourcePurl.Qualifiers,
+                                    sourcePurl.Subpath);
+                                packageDownloader = new PackageDownloader(
+                                    purlRef,
+                                    ProjectManagerFactory,
+                                    Path.Join(tempDirectoryName, "src"));
+                                downloadResults = await packageDownloader.DownloadPackageLocalCopy(purlRef, false, true);
+                                if (downloadResults.Any())
+                                {
+                                    sourceRepositorySubpath = sourcePurl.Subpath;
+                                    break;
+                                }
+                            }
+
                             if (downloadResults.Any())
                             {
                                 break;
                             }
                         }
+
                         if (!downloadResults.Any())
                         {
                             Logger.Debug("Unable to download source.");

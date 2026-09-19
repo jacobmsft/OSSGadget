@@ -123,7 +123,11 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 {
                     throw;
                 }
-                Logger.Debug(ex, "Suppressed error fetching {0}: {1}", OssUtilities.RedactUrlCredentials(uri), ex.Message);
+                Logger.Debug(
+                    "Suppressed error fetching {0} ({1}): {2}",
+                    OssUtilities.RedactUrlCredentials(uri),
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
             }
 
             return resultString;
@@ -157,7 +161,10 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                     Logger.Trace("Package not found at: {0}", redactedUrl);
                     return false;
                 }
-                Logger.Debug("Unable to check if package exists at {0}: {1}", redactedUrl, e.Message);
+                Logger.Debug(
+                    "Unable to check if package exists at {0}: {1}",
+                    redactedUrl,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(e.Message));
             }
             return false;
         }
@@ -191,7 +198,10 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                     Logger.Trace("Package not found at: {0}", redactedUrl);
                     return false;
                 }
-                Logger.Debug("Unable to check if package exists at {0}: {1}", redactedUrl, e.Message);
+                Logger.Debug(
+                    "Unable to check if package exists at {0}: {1}",
+                    redactedUrl,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(e.Message));
             }
             return false;
         }
@@ -425,21 +435,22 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             {
                 // Individual managers are expected to handle their own transient/HTTP failures and
                 // return null; this is a defensive fallback in case one doesn't.
-                Logger.Trace(ex, "Error fetching package metadata for {0}: {1}", purl, ex.Message);
+                Logger.Trace(
+                    "Error fetching package metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
                 rawMetadataString = string.Empty;
             }
+
+            List<SourceRepositoryCandidate> candidates = new();
 
             // Check the specific PackageManager-specific implementation first
             try
             {
                 IReadOnlyList<SourceRepositoryCandidate> packageManagerCandidates =
                     await SearchSourceRepositoryCandidatesInPackageMetadataAsync(purl, rawMetadataString);
-
-                // Return now if we've succeeded
-                if (packageManagerCandidates.Any())
-                {
-                    return new SourceRepositoryCandidateSet(packageManagerCandidates).Candidates;
-                }
+                candidates.AddRange(packageManagerCandidates);
             }
             catch (OperationCanceledException)
             {
@@ -448,26 +459,34 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             }
             catch (JsonException ex)
             {
-                Logger.Trace(ex, "Malformed metadata encountered while searching package metadata for {0}: {1}", purl, ex.Message);
+                Logger.Trace(
+                    "Malformed metadata encountered while searching package metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
             }
             catch (HttpRequestException ex)
             {
-                Logger.Trace(ex, "HTTP error while searching package metadata for {0}: {1}", purl, ex.Message);
+                Logger.Trace(
+                    "HTTP error while searching package metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
             }
             catch (Exception ex)
             {
-                Logger.Trace(ex, "Error searching package metadata for {0}: {1}", purl, ex.Message);
+                Logger.Trace(
+                    "Error searching package metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
             }
 
-            // Fall back to searching metadata for canonical repository URLs.
-            SourceRepositoryCandidateSet metadataTextCandidates =
-                SourceRepositoryCandidateSet.FromCompatibilityDictionary(
-                    purl,
-                    ExtractRankedSourceRepositories(purl, rawMetadataString),
-                    SourceRepositoryEvidenceKind.MetadataText,
-                    "packageMetadata");
+            candidates.AddRange(ExtractSourceRepositoryCandidatesFromMetadata(purl, rawMetadataString));
 
-            return metadataTextCandidates.Candidates;
+            return SourceRepositoryConfidencePolicy.RankCandidates(
+                purl,
+                new SourceRepositoryCandidateSet(candidates).Candidates);
         }
 
         /// <inheritdoc />
@@ -520,7 +539,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             IEnumerable<PackageURL> sourceUrls = RepositoryUrlParser.Extract(rawMetadataString);
             foreach (PackageURL sourceUrl in sourceUrls)
             {
-                SourceRepositoryEvidenceDescriptor evidence = new(SourceRepositoryEvidence.RawMetadataExtraction)
+                SourceRepositoryEvidenceDescriptor evidence = new(SourceRepositoryConfidenceEvidence.RawMetadataExtraction)
                 {
                     IsRootPath = string.IsNullOrEmpty(sourceUrl.Subpath),
                     IsMalformed = string.IsNullOrWhiteSpace(sourceUrl.Namespace) || string.IsNullOrWhiteSpace(sourceUrl.Name),
@@ -529,6 +548,20 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             }
 
             return sourceRepositoryMap;
+        }
+
+        /// <summary>
+        /// Extracts generic repository references from unstructured package metadata.
+        /// </summary>
+        public static IReadOnlyList<SourceRepositoryCandidate> ExtractSourceRepositoryCandidatesFromMetadata(
+            PackageURL purl,
+            string rawMetadataString)
+        {
+            return SourceRepositoryCandidateSet.FromCompatibilityDictionary(
+                purl,
+                ExtractRankedSourceRepositories(purl, rawMetadataString),
+                SourceRepositoryEvidenceKind.MetadataText,
+                "packageMetadata").Candidates;
         }
 
         /// <summary>
@@ -549,7 +582,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         /// Package managers can override this seam to retain exact fields and raw values. The default
         /// adapter preserves existing dictionary-based extractors during migration.
         /// </remarks>
-        protected virtual async Task<IReadOnlyList<SourceRepositoryCandidate>> SearchSourceRepositoryCandidatesInPackageMetadataAsync(
+        public virtual async Task<IReadOnlyList<SourceRepositoryCandidate>> SearchSourceRepositoryCandidatesInPackageMetadataAsync(
             PackageURL purl,
             string metadata)
         {

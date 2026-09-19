@@ -6,6 +6,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
     using AngleSharp.Html.Parser;
     using Extensions;
     using Helpers;
+    using Microsoft.CST.OpenSource.Model.SourceMapping;
     using Newtonsoft.Json.Linq;
     using PackageUrl;
     using System;
@@ -237,16 +238,26 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 }
                 return cocoapodsWebContent + " " + podSpecContent;
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                Logger.Debug(ex, $"Error fetching Cocoapods metadata: {ex.Message}");
+                Logger.Debug(
+                    "Error fetching CocoaPods metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
                 return null;
             }
         }
 
-        protected override Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
+        public override Task<IReadOnlyList<SourceRepositoryCandidate>> SearchSourceRepositoryCandidatesInPackageMetadataAsync(
+            PackageURL purl,
+            string metadata)
         {
-            return Task.FromResult(SourceRepositoryExtractor.FromJson(purl, metadata));
+            return Task.FromResult(SourceRepositoryExtractor.CandidatesFromJson(purl, metadata));
         }
     }
 }

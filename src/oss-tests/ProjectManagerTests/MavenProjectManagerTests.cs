@@ -133,6 +133,20 @@ public class MavenProjectManagerTests
         Assert.Equal(purl.Version, metadata.PackageVersion);
         Assert.NotNull(metadata.UploadTime);
     }
+
+    [Fact]
+    public async Task MetadataWithoutVersionUsesEnumeratedVersion()
+    {
+        PackageURL purl = new(
+            "pkg:maven/ant/ant?repository_url=https://repo1.maven.org/maven2");
+        _projectManager
+            .Setup(manager => manager.EnumerateVersionsAsync(purl, false, true))
+            .ReturnsAsync(new[] { "1.6" });
+
+        string? metadata = await _projectManager.Object.GetMetadataAsync(purl, useCache: false);
+
+        Assert.Equal(Resources.maven_ant_1_6_pom, metadata);
+    }
     
     [Theory]
     [InlineData("pkg:maven/ant/ant@1.6", 12, "1.6.5")]

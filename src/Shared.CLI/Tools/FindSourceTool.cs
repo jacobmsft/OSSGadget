@@ -3,6 +3,7 @@
 using CommandLine;
 using CommandLine.Text;
 using Microsoft.CodeAnalysis.Sarif;
+using Microsoft.CST.OpenSource.Helpers;
 using Microsoft.CST.OpenSource.Shared;
 using Microsoft.CST.OpenSource.Model.SourceMapping;
 using NLog;
@@ -21,6 +22,7 @@ namespace Microsoft.CST.OpenSource
 
     public class FindSourceTool : BaseTool<FindSourceToolOptions>
     {
+        private readonly IRepositoryVerifier? repositoryVerifier;
         private readonly RepositoryVerificationStage repositoryVerificationStage;
 
         private static readonly HashSet<string> IGNORE_PURLS = new()
@@ -32,6 +34,7 @@ namespace Microsoft.CST.OpenSource
             ProjectManagerFactory projectManagerFactory,
             IRepositoryVerifier? repositoryVerifier = null) : base(projectManagerFactory)
         {
+            this.repositoryVerifier = repositoryVerifier;
             repositoryVerificationStage = new RepositoryVerificationStage(repositoryVerifier);
         }
 
@@ -61,7 +64,9 @@ namespace Microsoft.CST.OpenSource
 
             try
             {
-                RepoSearch repoSearcher = new RepoSearch(ProjectManagerFactory);
+                RepoSearch repoSearcher = new(
+                    ProjectManagerFactory,
+                    SourceDiscoveryPipeline.CreateDefault(repositoryVerifier));
                 IReadOnlyList<SourceRepositoryCandidate> candidates =
                     await repoSearcher.ResolvePackageLibraryCandidatesAsync(purl);
 
@@ -92,7 +97,11 @@ namespace Microsoft.CST.OpenSource
             }
             catch (Exception ex)
             {
-                Logger.Warn(ex, "Error identifying source repository for {0}: {1}", purl, ex.Message);
+                Logger.Warn(
+                    "Error identifying source repository for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
             }
 
             return Array.Empty<SourceRepositoryCandidate>();
@@ -122,7 +131,7 @@ namespace Microsoft.CST.OpenSource
                 {
                     Message = new Message()
                     {
-                        Text = $"https://github.com/{result.Key.Namespace}/{result.Key.Name}"
+                        Text = GetRepositoryDisplayUrl(result.Key)
                     },
                     Kind = ResultKind.Informational,
                     Level = FailureLevel.None,
@@ -147,7 +156,7 @@ namespace Microsoft.CST.OpenSource
             {
                 double confidence = result.Value * 100.0;
                 stringOutput.Add(
-                    $"{confidence:0.0}%\thttps://github.com/{result.Key.Namespace}/{result.Key.Name} ({result.Key})");
+                    $"{confidence:0.0}%\t{GetRepositoryDisplayUrl(result.Key)} ({result.Key})");
             }
             return stringOutput;
         }
@@ -192,7 +201,7 @@ namespace Microsoft.CST.OpenSource
             {
                 case OutputFormat.text:
                 default:
-                    outputBuilder.AppendOutput(new string[] { $"https://github.com/{result.Key.Namespace}/{result.Key.Name}" });
+                    outputBuilder.AppendOutput(new string[] { GetRepositoryDisplayUrl(result.Key) });
                     break;
 
                 case OutputFormat.sarifv1:
@@ -200,6 +209,14 @@ namespace Microsoft.CST.OpenSource
                     outputBuilder.AppendOutput(GetSarifResults(purl, new List<KeyValuePair<PackageURL, double>>() { result }));
                     break;
             }
+        }
+
+        internal static string GetRepositoryDisplayUrl(PackageURL repository)
+        {
+            Uri? repositoryUri = RepositoryUrlParser.GetRepositoryUri(
+                repository,
+                includeSourceLocation: true);
+            return repositoryUri?.ToString().TrimEnd('/') ?? repository.ToString();
         }
 
         public override async Task<ErrorCode> RunAsync(FindSourceToolOptions findSourceToolOptions)
@@ -247,7 +264,10 @@ namespace Microsoft.CST.OpenSource
                     }
                     catch (Exception ex)
                     {
-                        Logger.Warn("Error processing {0}: {1}", target, ex.Message);
+                        Logger.Warn(
+                            "Error processing {0}: {1}",
+                            target,
+                            SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
                     }
                 }
                 outputBuilder.PrintOutput();

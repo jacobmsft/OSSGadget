@@ -2,6 +2,7 @@
 
 namespace Microsoft.CST.OpenSource.Tests;
 
+using Microsoft.CST.OpenSource.Model.SourceMapping;
 using Microsoft.CST.OpenSource.PackageManagers;
 using PackageUrl;
 using System.Collections.Generic;
@@ -15,13 +16,13 @@ public class SourceRepositoryConfidencePolicyTests
     [Fact]
     public void EvidenceOrdering_IsExplicitAndStable()
     {
-        double authoritative = Rank(SourceRepositoryEvidence.RequestedVersionAuthoritativeRepository);
-        double explicitSource = Rank(SourceRepositoryEvidence.RequestedVersionExplicitSource);
-        double labeledProjectUrl = Rank(SourceRepositoryEvidence.LabeledProjectUrl);
-        double historical = Rank(SourceRepositoryEvidence.HistoricalVersionAuthoritativeRepository);
-        double homepage = Rank(SourceRepositoryEvidence.HomepageOrDownloadInference);
-        double rawMetadata = Rank(SourceRepositoryEvidence.RawMetadataExtraction);
-        double nameInference = Rank(SourceRepositoryEvidence.NameInference);
+        double authoritative = Rank(SourceRepositoryConfidenceEvidence.RequestedVersionAuthoritativeRepository);
+        double explicitSource = Rank(SourceRepositoryConfidenceEvidence.RequestedVersionExplicitSource);
+        double labeledProjectUrl = Rank(SourceRepositoryConfidenceEvidence.LabeledProjectUrl);
+        double historical = Rank(SourceRepositoryConfidenceEvidence.HistoricalVersionAuthoritativeRepository);
+        double homepage = Rank(SourceRepositoryConfidenceEvidence.HomepageOrDownloadInference);
+        double rawMetadata = Rank(SourceRepositoryConfidenceEvidence.RawMetadataExtraction);
+        double nameInference = Rank(SourceRepositoryConfidenceEvidence.NameInference);
 
         Assert.True(authoritative > explicitSource);
         Assert.True(explicitSource > labeledProjectUrl);
@@ -37,7 +38,7 @@ public class SourceRepositoryConfidencePolicyTests
         double score = SourceRepositoryConfidencePolicy.Rank(
             Package,
             Repository,
-            new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.NameInference)
+            new SourceRepositoryEvidenceDescriptor(SourceRepositoryConfidenceEvidence.NameInference)
             {
                 IsAmbiguous = true,
                 IsFork = true,
@@ -51,7 +52,7 @@ public class SourceRepositoryConfidencePolicyTests
     [Fact]
     public void RankCandidates_KeepsStrongestEvidenceForDuplicateRepository()
     {
-        SourceRepositoryEvidenceDescriptor authoritative = new(SourceRepositoryEvidence.RequestedVersionAuthoritativeRepository)
+        SourceRepositoryEvidenceDescriptor authoritative = new(SourceRepositoryConfidenceEvidence.RequestedVersionAuthoritativeRepository)
         {
             IsAmbiguous = true,
             IsFork = true,
@@ -64,10 +65,10 @@ public class SourceRepositoryConfidencePolicyTests
             new[]
             {
                 new KeyValuePair<PackageURL, SourceRepositoryEvidenceDescriptor>(
-                    Repository,
-                    new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.RequestedVersionExplicitSource)),
+                    new PackageURL(Repository.ToString()),
+                    new SourceRepositoryEvidenceDescriptor(SourceRepositoryConfidenceEvidence.RequestedVersionExplicitSource)),
                 new KeyValuePair<PackageURL, SourceRepositoryEvidenceDescriptor>(
-                    Repository,
+                    new PackageURL(Repository.ToString()),
                     authoritative),
             });
 
@@ -87,10 +88,10 @@ public class SourceRepositoryConfidencePolicyTests
             {
                 new KeyValuePair<PackageURL, SourceRepositoryEvidenceDescriptor>(
                     zulu,
-                    new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.RawMetadataExtraction)),
+                    new SourceRepositoryEvidenceDescriptor(SourceRepositoryConfidenceEvidence.RawMetadataExtraction)),
                 new KeyValuePair<PackageURL, SourceRepositoryEvidenceDescriptor>(
                     alpha,
-                    new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.RawMetadataExtraction)),
+                    new SourceRepositoryEvidenceDescriptor(SourceRepositoryConfidenceEvidence.RawMetadataExtraction)),
             });
 
         Assert.Equal(alpha, ranked[0].Key);
@@ -99,11 +100,11 @@ public class SourceRepositoryConfidencePolicyTests
     [Fact]
     public void AmbiguousCandidate_RanksBelowEquivalentUnambiguousCandidate()
     {
-        double unambiguous = Rank(SourceRepositoryEvidence.LabeledProjectUrl);
+        double unambiguous = Rank(SourceRepositoryConfidenceEvidence.LabeledProjectUrl);
         double ambiguous = SourceRepositoryConfidencePolicy.Rank(
             Package,
             Repository,
-            new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.LabeledProjectUrl)
+            new SourceRepositoryEvidenceDescriptor(SourceRepositoryConfidenceEvidence.LabeledProjectUrl)
             {
                 IsAmbiguous = true,
             });
@@ -128,11 +129,50 @@ public class SourceRepositoryConfidencePolicyTests
         Assert.Equal(alpha, ordered[1].Key);
     }
 
-    private static double Rank(SourceRepositoryEvidence evidence)
+    [Fact]
+    public void EvidenceRichRankingUsesVersionAndVerificationMetadata()
+    {
+        PackageURL versionedPackage = new("pkg:npm/widgets@2.0.0");
+        SourceRepositoryCandidate requested = CreateCandidate(
+            SourceRepositoryEvidenceKind.RegistryRepository,
+            metadataVersion: "2.0.0",
+            SourceRepositoryVerificationStatus.Verified);
+        SourceRepositoryCandidate historical = CreateCandidate(
+            SourceRepositoryEvidenceKind.RegistryRepository,
+            metadataVersion: "1.0.0",
+            SourceRepositoryVerificationStatus.NotAttempted);
+
+        double requestedScore = SourceRepositoryConfidencePolicy.Rank(versionedPackage, requested);
+        double historicalScore = SourceRepositoryConfidencePolicy.Rank(versionedPackage, historical);
+
+        Assert.True(requestedScore > historicalScore);
+    }
+
+    private static double Rank(SourceRepositoryConfidenceEvidence evidence)
     {
         return SourceRepositoryConfidencePolicy.Rank(
             Package,
             Repository,
             new SourceRepositoryEvidenceDescriptor(evidence));
+    }
+
+    private static SourceRepositoryCandidate CreateCandidate(
+        SourceRepositoryEvidenceKind evidenceKind,
+        string metadataVersion,
+        SourceRepositoryVerificationStatus verificationStatus)
+    {
+        return new SourceRepositoryCandidate(
+            new SourceRepositoryIdentity(Repository),
+            new[]
+            {
+                new SourceRepositoryEvidence(
+                    evidenceKind,
+                    "repository.url",
+                    Repository.ToString(),
+                    metadataVersion)
+            },
+            0,
+            metadataVersion,
+            verificationStatus: verificationStatus);
     }
 }

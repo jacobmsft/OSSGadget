@@ -89,7 +89,11 @@ namespace Microsoft.CST.OpenSource.Shared
                 }
                 catch (Exception ex)
                 {
-                    Logger.Warn(ex, "Error identifying source repository for {0}: {1}", purlNoVersion, ex.Message);
+                    Logger.Warn(
+                        "Error identifying source repository for {0} ({1}): {2}",
+                        purlNoVersion,
+                        ex.GetType().Name,
+                        SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
                     candidates = Array.Empty<SourceRepositoryCandidate>();
                 }
 

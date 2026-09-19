@@ -8,6 +8,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
     using Microsoft.CST.OpenSource.Extensions;
     using Microsoft.CST.OpenSource.Model;
     using Microsoft.CST.OpenSource.Model.Enums;
+    using Microsoft.CST.OpenSource.Model.SourceMapping;
     using Microsoft.CST.OpenSource.PackageActions;
     using Newtonsoft.Json.Linq;
     using PackageUrl;
@@ -271,12 +272,20 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                     version = purl.Version;
                 }
 
-                var baseUrl = $"{feedUrl.EnsureTrailingSlash()}{packageNamespace}/{packageName}/{purl.Version}/{packageName}-{purl.Version}.pom";
+                var baseUrl = $"{feedUrl.EnsureTrailingSlash()}{packageNamespace}/{packageName}/{version}/{packageName}-{version}.pom";
                 return await GetHttpStringCache(httpClient, baseUrl, useCache);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
-                Logger.Warn(ex, $"Error fetching Maven metadata: {ex.Message}");
+                Logger.Warn(
+                    "Error fetching Maven metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
                 return null;
             }
         }
@@ -298,9 +307,11 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             return metadata;
         }
 
-        protected override Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
+        public override Task<IReadOnlyList<SourceRepositoryCandidate>> SearchSourceRepositoryCandidatesInPackageMetadataAsync(
+            PackageURL purl,
+            string metadata)
         {
-            return Task.FromResult(SourceRepositoryExtractor.FromXml(purl, metadata));
+            return Task.FromResult(SourceRepositoryExtractor.CandidatesFromXml(purl, metadata));
         }
 
         private static MavenArtifactType GetMavenArtifactType(string fileName)

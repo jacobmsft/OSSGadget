@@ -8,6 +8,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
     using Extensions;
     using Helpers;
     using Model;
+    using Model.SourceMapping;
     using PackageActions;
     using PackageUrl;
     using System;
@@ -295,12 +296,20 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             }
             catch (HttpRequestException ex)
             {
-                Logger.Debug(ex, "HTTP error fetching PyPI metadata for {0}: {1}", purl, ex.Message);
+                Logger.Debug(
+                    "HTTP error fetching PyPI metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
                 return null;
             }
             catch (Exception ex)
             {
-                Logger.Debug(ex, "Error fetching PyPI metadata for {0}: {1}", purl, ex.Message);
+                Logger.Debug(
+                    "Error fetching PyPI metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
                 return null;
             }
         }
@@ -515,29 +524,41 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             return new Uri($"{ENV_PYPI_ENDPOINT}/project/{purl?.Name}");
         }
 
-#pragma warning disable CS1998 // Async method lacks 'await' operators and will run synchronously
-        protected override async Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
-#pragma warning restore CS1998 // Async method lacks 'await' operators and will run synchronously
+        protected override async Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(
+            PackageURL purl,
+            string metadata)
         {
-            Dictionary<PackageURL, double> mapping = new();
+            IReadOnlyList<SourceRepositoryCandidate> candidates =
+                await SearchSourceRepositoryCandidatesInPackageMetadataAsync(purl, metadata);
+            return new SourceRepositoryCandidateSet(candidates).ToCompatibilityDictionary();
+        }
+
+        public override Task<IReadOnlyList<SourceRepositoryCandidate>> SearchSourceRepositoryCandidatesInPackageMetadataAsync(
+            PackageURL purl,
+            string metadata)
+        {
+            List<SourceRepositoryCandidate> candidates = new();
             if (purl.Name?.StartsWith('_') ?? false) // TODO: there are internal modules which do not start with _
             {
-                // TODO: internal modules could also be in https://github.com/python/cpython/tree/master/Modules/
-                PackageURL curatedMapping = new(purl.Type, purl.Namespace, purl.Name, null, null, "cpython/tree/master/Lib/");
-                mapping.Add(
-                    curatedMapping,
-                    SourceRepositoryConfidencePolicy.Rank(
-                        purl,
-                        curatedMapping,
-                        new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.CuratedMapping)
-                        {
-                            IsRootPath = false,
-                        }));
-                return mapping;
+                PackageURL curatedMapping = new("github", "python", "cpython", "master", null, "Lib");
+                candidates.Add(new SourceRepositoryCandidate(
+                    new SourceRepositoryIdentity(curatedMapping),
+                    new[]
+                    {
+                        new SourceRepositoryEvidence(
+                            SourceRepositoryEvidenceKind.BuiltInMapping,
+                            "python.internal",
+                            "https://github.com/python/cpython/tree/master/Lib",
+                            purl.Version)
+                    },
+                    1.0,
+                    purl.Version,
+                    curatedMapping.Version));
+                return Task.FromResult<IReadOnlyList<SourceRepositoryCandidate>>(candidates);
             }
-            if (string.IsNullOrEmpty(metadata))
+            if (string.IsNullOrWhiteSpace(metadata))
             {
-                return mapping;
+                return Task.FromResult<IReadOnlyList<SourceRepositoryCandidate>>(candidates);
             }
 
             JsonDocument contentJSON;
@@ -547,86 +568,107 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             }
             catch (JsonException ex)
             {
-                Logger.Debug(ex, "Malformed PyPI metadata JSON for {0}: {1}", purl, ex.Message);
-                return mapping;
+                Logger.Debug(
+                    "Malformed PyPI metadata JSON for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
+                return Task.FromResult<IReadOnlyList<SourceRepositoryCandidate>>(candidates);
             }
 
-            List<string> possibleLocationProperties = new() { "home_page", "download_url" };
-
-            JsonElement infoJSON;
-            try
+            using (contentJSON)
             {
-                infoJSON = contentJSON.RootElement.GetProperty("info");
-            }
-            catch (KeyNotFoundException ex)
-            {
-                Logger.Debug(ex, "PyPI metadata for {0} is missing the 'info' field: {1}", purl, ex.Message);
-                return mapping;
-            }
-            catch (InvalidOperationException ex)
-            {
-                // The root element wasn't an object (e.g. malformed metadata).
-                Logger.Debug(ex, "PyPI metadata for {0} had an unexpected shape: {1}", purl, ex.Message);
-                return mapping;
-            }
-
-            foreach (JsonProperty property in infoJSON.EnumerateObject())
-            {
-                if (possibleLocationProperties.Contains(property.Name.ToLower()) && property.Value.ToString() is { } url)
+                if (contentJSON.RootElement.ValueKind != JsonValueKind.Object ||
+                    !contentJSON.RootElement.TryGetProperty("info", out JsonElement infoJSON) ||
+                    infoJSON.ValueKind != JsonValueKind.Object)
                 {
-                    IEnumerable<PackageURL>? packageUrls = GitHubProjectManager.ExtractGitHubPackageURLs(url);
-                    // if we were not able to extract a github url, continue
-                    if (packageUrls.FirstOrDefault() is { } packageUrl)
+                    Logger.Debug("PyPI metadata for {0} is missing an object-valued 'info' field.", purl);
+                    return Task.FromResult<IReadOnlyList<SourceRepositoryCandidate>>(candidates);
+                }
+
+                foreach (string propertyName in new[] { "home_page", "download_url" })
+                {
+                    if (infoJSON.TryGetProperty(propertyName, out JsonElement property) &&
+                        property.ValueKind == JsonValueKind.String &&
+                        RepositoryUrlParser.TryParseRepository(
+                            property.GetString(),
+                            allowGenericHosts: false,
+                            out RepositoryUrlParseResult? parsed) &&
+                        parsed is not null)
                     {
-                        mapping[packageUrl] = SourceRepositoryConfidencePolicy.Rank(
-                            purl,
-                            packageUrl,
-                            new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.HomepageOrDownloadInference));
-                        return mapping;
+                        candidates.Add(new SourceRepositoryCandidate(
+                            new SourceRepositoryIdentity(parsed.PackageUrl, parsed.CanonicalUri),
+                            new[]
+                            {
+                                new SourceRepositoryEvidence(
+                                    propertyName == "home_page"
+                                        ? SourceRepositoryEvidenceKind.Homepage
+                                        : SourceRepositoryEvidenceKind.DownloadUrl,
+                                    $"info.{propertyName}",
+                                    property.GetString(),
+                                    purl.Version)
+                            },
+                            1.0,
+                            purl.Version,
+                            parsed.PackageUrl.Version,
+                            parsed.PackageUrl.Qualifiers));
                     }
                 }
 
-                // See https://setuptools.pypa.io/en/latest/references/keywords.html
-                // project_urls is a map of arbitrary strings to strings (values are expected to be urls)
-                // The key name is arbitrary, so we can check all the keys and if any are detected as repository urls,
-                //   that should be what we are looking for.
-                if (property.Name.Equals("project_urls") && property.Value.ValueKind == JsonValueKind.Object)
+                if (infoJSON.TryGetProperty("project_urls", out JsonElement projectUrls) &&
+                    projectUrls.ValueKind == JsonValueKind.Object)
                 {
-                    foreach (JsonProperty projectUrl in property.Value.EnumerateObject())
+                    foreach (JsonProperty projectUrl in projectUrls.EnumerateObject())
                     {
                         try
                         {
-                            if (projectUrl.Value.ToString() is { } possibleGitHubUrl)
+                            bool isLabeledSource =
+                                projectUrl.Name.Contains("repo", StringComparison.OrdinalIgnoreCase) ||
+                                projectUrl.Name.Contains("source", StringComparison.OrdinalIgnoreCase) ||
+                                projectUrl.Name.Contains("code", StringComparison.OrdinalIgnoreCase) ||
+                                projectUrl.Name.Contains("git", StringComparison.OrdinalIgnoreCase);
+                            string? rawUrl = projectUrl.Value.ValueKind == JsonValueKind.String
+                                ? projectUrl.Value.GetString()
+                                : null;
+                            if (RepositoryUrlParser.TryParseRepository(
+                                    rawUrl,
+                                    allowGenericHosts: isLabeledSource,
+                                    out RepositoryUrlParseResult? parsed) &&
+                                parsed is not null)
                             {
-                                IEnumerable<PackageURL>? packageUrls =
-                                    GitHubProjectManager.ExtractGitHubPackageURLs(possibleGitHubUrl);
-                                // if we were able to extract a github url, return
-                                if (packageUrls.FirstOrDefault() is { } packageUrl)
-                                {
-                                    bool isLabeledSource = projectUrl.Name.Contains("repo", StringComparison.OrdinalIgnoreCase) ||
-                                        projectUrl.Name.Contains("source", StringComparison.OrdinalIgnoreCase) ||
-                                        projectUrl.Name.Contains("code", StringComparison.OrdinalIgnoreCase);
-                                    mapping[packageUrl] = SourceRepositoryConfidencePolicy.Rank(
-                                        purl,
-                                        packageUrl,
-                                        new SourceRepositoryEvidenceDescriptor(
+                                candidates.Add(new SourceRepositoryCandidate(
+                                    new SourceRepositoryIdentity(parsed.PackageUrl, parsed.CanonicalUri),
+                                    new[]
+                                    {
+                                        new SourceRepositoryEvidence(
                                             isLabeledSource
-                                                ? SourceRepositoryEvidence.LabeledProjectUrl
-                                                : SourceRepositoryEvidence.RawMetadataExtraction));
-                                    return mapping;
-                                }
+                                                ? SourceRepositoryEvidenceKind.RegistryProjectUrl
+                                                : SourceRepositoryEvidenceKind.MetadataText,
+                                            $"info.project_urls.{projectUrl.Name}",
+                                            rawUrl,
+                                            purl.Version)
+                                    },
+                                    1.0,
+                                    purl.Version,
+                                    parsed.PackageUrl.Version,
+                                    parsed.PackageUrl.Qualifiers));
                             }
                         }
                         catch (Exception ex)
                         {
-                            // A single malformed project_urls entry shouldn't stop us from checking the rest.
-                            Logger.Debug(ex, "Error parsing project_urls entry '{0}' for {1}: {2}", projectUrl.Name, purl, ex.Message);
+                            Logger.Debug(
+                                "Error parsing project_urls entry '{0}' for {1} ({2}): {3}",
+                                projectUrl.Name,
+                                purl,
+                                ex.GetType().Name,
+                                SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
                         }
                     }
                 }
             }
 
-            return mapping;
+            return Task.FromResult<IReadOnlyList<SourceRepositoryCandidate>>(
+                new SourceRepositoryCandidateSet(candidates).Candidates);
         }
 
         public enum PyPIArtifactType

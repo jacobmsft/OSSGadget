@@ -4,6 +4,7 @@ namespace Microsoft.CST.OpenSource.Tests.ProjectManagerTests;
 
 using Microsoft.CST.OpenSource.PackageActions;
 using Microsoft.CST.OpenSource.PackageManagers;
+using Microsoft.CST.OpenSource.Model.SourceMapping;
 using Microsoft.CST.OpenSource.Shared;
 using Microsoft.CST.OpenSource.Utilities;
 using Moq;
@@ -70,38 +71,42 @@ public class SourceDiscoveryResilienceTests
 
     #endregion
 
-    #region BaseProjectManager.MergeSourceRepositoryCandidates (duplicate candidates)
+    #region SourceRepositoryCandidateSet duplicate aggregation
 
     [Fact]
-    public void MergeSourceRepositoryCandidates_DuplicateKey_KeepsHighestScore_WithoutThrowing()
+    public void CandidateSet_DuplicateKey_KeepsHighestScore_WithoutThrowing()
     {
-        MethodInfo? method = typeof(BaseProjectManager).GetMethod(
-            "MergeSourceRepositoryCandidates",
-            BindingFlags.NonPublic | BindingFlags.Static);
-
-        Assert.NotNull(method);
-
         PackageURL purlA = new("pkg:github/foo/bar");
         PackageURL purlB = new("pkg:github/foo/baz");
-
-        Dictionary<PackageURL, double> target = new()
+        SourceRepositoryCandidate[] candidates =
         {
-            [purlA] = 0.5,
+            CreateCandidate(purlA, 0.5),
+            CreateCandidate(purlA, 0.3),
+            CreateCandidate(purlA, 0.9),
+            CreateCandidate(purlB, 0.4),
         };
 
-        List<KeyValuePair<PackageURL, double>> candidates = new()
-        {
-            new KeyValuePair<PackageURL, double>(purlA, 0.3), // lower score, should be ignored
-            new KeyValuePair<PackageURL, double>(purlA, 0.9), // higher score, should win
-            new KeyValuePair<PackageURL, double>(purlB, 0.4), // new key, should be added
-        };
+        SourceRepositoryCandidateSet result = new(candidates);
 
-        Exception? recordedException = Record.Exception(() => method!.Invoke(null, new object[] { target, candidates }));
+        Assert.Equal(2, result.Candidates.Count);
+        Assert.Equal(0.9, result.Candidates.Single(candidate =>
+            candidate.ToPackageUrl().ToString() == purlA.ToString()).Confidence);
+        Assert.Equal(0.4, result.Candidates.Single(candidate =>
+            candidate.ToPackageUrl().ToString() == purlB.ToString()).Confidence);
+    }
 
-        Assert.Null(recordedException);
-        Assert.Equal(2, target.Count);
-        Assert.Equal(0.9, target[purlA]);
-        Assert.Equal(0.4, target[purlB]);
+    private static SourceRepositoryCandidate CreateCandidate(PackageURL repository, double confidence)
+    {
+        return new SourceRepositoryCandidate(
+            new SourceRepositoryIdentity(repository),
+            new[]
+            {
+                new SourceRepositoryEvidence(
+                    SourceRepositoryEvidenceKind.MetadataText,
+                    "test",
+                    repository.ToString())
+            },
+            confidence);
     }
 
     #endregion

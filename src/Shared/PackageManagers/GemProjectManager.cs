@@ -3,7 +3,7 @@
 namespace Microsoft.CST.OpenSource.PackageManagers
 {
     using Helpers;
-    using Helpers;
+    using Microsoft.CST.OpenSource.Model.SourceMapping;
     using PackageUrl;
     using System;
     using System.Collections.Generic;
@@ -164,9 +164,17 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 string contentGem = await GetHttpStringCache(httpClient, $"{ENV_RUBYGEMS_ENDPOINT_API}/api/v1/gems/{packageName}.json", useCache) ?? "";
                 return contentVersion + contentGem;
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                Logger.Debug(ex, "Error fetching RubyGems metadata: {0}", ex.Message);
+                Logger.Debug(
+                    "Error fetching RubyGems metadata for {0} ({1}): {2}",
+                    purl,
+                    ex.GetType().Name,
+                    SourceRepositoryEvidence.SanitizeSensitiveText(ex.Message));
                 return null;
             }
         }
@@ -176,9 +184,11 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             return new Uri($"{ENV_RUBYGEMS_ENDPOINT}/gems/{purl?.Name}");
         }
 
-        protected override Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
+        public override Task<IReadOnlyList<SourceRepositoryCandidate>> SearchSourceRepositoryCandidatesInPackageMetadataAsync(
+            PackageURL purl,
+            string metadata)
         {
-            return Task.FromResult(SourceRepositoryExtractor.FromJson(purl, metadata));
+            return Task.FromResult(SourceRepositoryExtractor.CandidatesFromJson(purl, metadata));
         }
     }
 }
