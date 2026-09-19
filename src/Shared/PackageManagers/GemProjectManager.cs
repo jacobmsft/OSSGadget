@@ -3,6 +3,7 @@
 namespace Microsoft.CST.OpenSource.PackageManagers
 {
     using Helpers;
+    using Helpers;
     using PackageUrl;
     using System;
     using System.Collections.Generic;
@@ -173,6 +174,11 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         public override Uri GetPackageAbsoluteUri(PackageURL purl)
         {
             return new Uri($"{ENV_RUBYGEMS_ENDPOINT}/gems/{purl?.Name}");
+        }
+
+        protected override Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
+        {
+            return Task.FromResult(SourceRepositoryExtractor.FromJson(purl, metadata));
         }
     }
 }

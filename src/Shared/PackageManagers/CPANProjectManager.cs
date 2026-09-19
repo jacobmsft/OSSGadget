@@ -179,5 +179,15 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             return new Uri($"{ENV_CPAN_ENDPOINT}/pod/{packageName}");
             // TODO: Add version support
         }
+
+        protected override Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
+        {
+            Dictionary<PackageURL, double> result = SourceRepositoryExtractor.FromJson(purl, metadata);
+            foreach (KeyValuePair<PackageURL, double> candidate in SourceRepositoryExtractor.FromExplicitTextFields(purl, metadata))
+            {
+                result[candidate.Key] = candidate.Value;
+            }
+            return Task.FromResult(result);
+        }
     }
 }

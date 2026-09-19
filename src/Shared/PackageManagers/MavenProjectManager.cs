@@ -298,6 +298,11 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             return metadata;
         }
 
+        protected override Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
+        {
+            return Task.FromResult(SourceRepositoryExtractor.FromXml(purl, metadata));
+        }
+
         private static MavenArtifactType GetMavenArtifactType(string fileName)
         {
             if (string.IsNullOrEmpty(fileName))
