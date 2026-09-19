@@ -8,6 +8,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
     using Microsoft.CST.OpenSource.Model;
     using Model.Enums;
     using Model.PackageExistence;
+    using Model.SourceMapping;
     using System;
     using System.Collections.Generic;
     using System.Linq;
@@ -424,25 +425,24 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         }
 
         /// <inheritdoc />
-        public async Task<Dictionary<PackageURL, double>> IdentifySourceRepositoryAsync(PackageURL purl, bool useCache = true)
+        public async Task<IReadOnlyList<SourceRepositoryCandidate>> IdentifySourceRepositoryCandidatesAsync(
+            PackageURL purl,
+            bool useCache = true)
         {
-            Logger.Trace("IdentifySourceRepository({0})", purl);
+            Logger.Trace("IdentifySourceRepositoryCandidatesAsync({0})", purl);
 
             string rawMetadataString = await GetMetadataAsync(purl, useCache) ?? string.Empty;
-            Dictionary<PackageURL, double> sourceRepositoryMap = new();
 
             // Check the specific PackageManager-specific implementation first
             try
             {
-                foreach (KeyValuePair<PackageURL, double> result in await SearchRepoUrlsInPackageMetadata(purl, rawMetadataString))
-                {
-                    sourceRepositoryMap.Add(result.Key, result.Value);
-                }
+                IReadOnlyList<SourceRepositoryCandidate> packageManagerCandidates =
+                    await SearchSourceRepositoryCandidatesInPackageMetadataAsync(purl, rawMetadataString);
 
                 // Return now if we've succeeded
-                if (sourceRepositoryMap.Any())
+                if (packageManagerCandidates.Any())
                 {
-                    return sourceRepositoryMap;
+                    return new SourceRepositoryCandidateSet(packageManagerCandidates).Candidates;
                 }
             }
             catch (Exception ex)
@@ -451,12 +451,22 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             }
 
             // Fall back to searching the metadata string for all possible GitHub URLs.
-            foreach (KeyValuePair<PackageURL, double> result in ExtractRankedSourceRepositories(purl, rawMetadataString))
-            {
-                sourceRepositoryMap.Add(result.Key, result.Value);
-            }
+            SourceRepositoryCandidateSet metadataTextCandidates =
+                SourceRepositoryCandidateSet.FromCompatibilityDictionary(
+                    purl,
+                    ExtractRankedSourceRepositories(purl, rawMetadataString),
+                    SourceRepositoryEvidenceKind.MetadataText,
+                    "packageMetadata");
 
-            return sourceRepositoryMap;
+            return metadataTextCandidates.Candidates;
+        }
+
+        /// <inheritdoc />
+        public async Task<Dictionary<PackageURL, double>> IdentifySourceRepositoryAsync(PackageURL purl, bool useCache = true)
+        {
+            IReadOnlyList<SourceRepositoryCandidate> candidates =
+                await IdentifySourceRepositoryCandidatesAsync(purl, useCache);
+            return new SourceRepositoryCandidateSet(candidates).ToCompatibilityDictionary();
         }
 
         /// <inheritdoc />
@@ -532,6 +542,25 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         protected virtual Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
         {
             return Task.FromResult(new Dictionary<PackageURL, double>());
+        }
+
+        /// <summary>
+        /// Searches package metadata for source repository candidates.
+        /// </summary>
+        /// <remarks>
+        /// Package managers can override this seam to retain exact fields and raw values. The default
+        /// adapter preserves existing dictionary-based extractors during migration.
+        /// </remarks>
+        protected virtual async Task<IReadOnlyList<SourceRepositoryCandidate>> SearchSourceRepositoryCandidatesInPackageMetadataAsync(
+            PackageURL purl,
+            string metadata)
+        {
+            Dictionary<PackageURL, double> mappings = await SearchRepoUrlsInPackageMetadata(purl, metadata);
+            return SourceRepositoryCandidateSet.FromCompatibilityDictionary(
+                purl,
+                mappings,
+                SourceRepositoryEvidenceKind.RegistryRepository,
+                $"{GetType().Name}.packageMetadata").Candidates;
         }
 
         protected HttpClient CreateHttpClient()
