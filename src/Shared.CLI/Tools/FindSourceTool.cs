@@ -17,16 +17,22 @@ namespace Microsoft.CST.OpenSource
     using OssGadget.Options;
     using PackageManagers;
     using PackageUrl;
+    using SourceRepositories;
 
     public class FindSourceTool : BaseTool<FindSourceToolOptions>
     {
+        private readonly RepositoryVerificationStage repositoryVerificationStage;
+
         private static readonly HashSet<string> IGNORE_PURLS = new()
         {
             "pkg:github/metacpan/metacpan-web"
         };
 
-        public FindSourceTool(ProjectManagerFactory projectManagerFactory) : base(projectManagerFactory)
+        public FindSourceTool(
+            ProjectManagerFactory projectManagerFactory,
+            IRepositoryVerifier? repositoryVerifier = null) : base(projectManagerFactory)
         {
+            repositoryVerificationStage = new RepositoryVerificationStage(repositoryVerifier);
         }
 
         public FindSourceTool() : this(new ProjectManagerFactory())
@@ -85,6 +91,13 @@ namespace Microsoft.CST.OpenSource
             }
 
             return Array.Empty<SourceRepositoryCandidate>();
+        }
+
+        public async Task<IReadOnlyDictionary<PackageURL, RepositoryVerification>> VerifySourceRepositoriesAsync(
+            PackageURL purl)
+        {
+            Dictionary<PackageURL, double> repositories = await FindSourceAsync(purl);
+            return await repositoryVerificationStage.VerifyAsync(repositories.Keys);
         }
 
 
