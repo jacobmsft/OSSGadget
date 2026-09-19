@@ -4,6 +4,7 @@ using CommandLine;
 using CommandLine.Text;
 using Microsoft.CodeAnalysis.Sarif;
 using Microsoft.CST.OpenSource.Shared;
+using Microsoft.CST.OpenSource.Model.SourceMapping;
 using NLog;
 using System;
 using System.Collections.Generic;
@@ -34,14 +35,18 @@ namespace Microsoft.CST.OpenSource
 
         public async Task<Dictionary<PackageURL, double>> FindSourceAsync(PackageURL purl)
         {
-            Logger.Trace("FindSourceAsync({0})", purl);
+            IReadOnlyList<SourceRepositoryCandidate> candidates = await FindSourceCandidatesAsync(purl);
+            return new SourceRepositoryCandidateSet(candidates).ToCompatibilityDictionary();
+        }
 
-            Dictionary<PackageURL, double>? repositoryMap = new Dictionary<PackageURL, double>();
+        internal async Task<IReadOnlyList<SourceRepositoryCandidate>> FindSourceCandidatesAsync(PackageURL purl)
+        {
+            Logger.Trace("FindSourceCandidatesAsync({0})", purl);
 
             if (purl == null)
             {
-                Logger.Warn("FindSourceAsync was passed an invalid purl.");
-                return repositoryMap;
+                Logger.Warn("FindSourceCandidatesAsync was passed an invalid purl.");
+                return Array.Empty<SourceRepositoryCandidate>();
             }
 
             PackageURL? purlNoVersion = new PackageURL(purl.Type, purl.Namespace, purl.Name,
@@ -51,33 +56,35 @@ namespace Microsoft.CST.OpenSource
             try
             {
                 RepoSearch repoSearcher = new RepoSearch(ProjectManagerFactory);
-                Dictionary<PackageURL, double>? repos = await (repoSearcher.ResolvePackageLibraryAsync(purl) ??
-                    Task.FromResult(new Dictionary<PackageURL, double>()));
+                IReadOnlyList<SourceRepositoryCandidate> candidates =
+                    await repoSearcher.ResolvePackageLibraryCandidatesAsync(purl);
 
                 foreach (string? ignorePurl in IGNORE_PURLS)
                 {
-                    repos.Remove(new PackageURL(ignorePurl));
+                    SourceRepositoryIdentity ignoredIdentity =
+                        new SourceRepositoryIdentity(new PackageURL(ignorePurl));
+                    candidates = candidates
+                        .Where(candidate => !candidate.Identity.Equals(ignoredIdentity))
+                        .ToArray();
                 }
 
-                if (repos.Any())
+                if (candidates.Any())
                 {
-                    foreach (PackageURL? key in repos.Keys)
-                    {
-                        repositoryMap[key] = repos[key];
-                    }
-                    Logger.Debug("Identified {0} repositories.", repos.Count);
+                    Logger.Debug("Identified {0} repositories.", candidates.Count);
                 }
                 else
                 {
                     Logger.Warn("No repositories found for package {0}", purl);
                 }
+
+                return candidates;
             }
             catch (Exception ex)
             {
                 Logger.Warn(ex, "Error identifying source repository for {0}: {1}", purl, ex.Message);
             }
 
-            return repositoryMap;
+            return Array.Empty<SourceRepositoryCandidate>();
         }
 
 

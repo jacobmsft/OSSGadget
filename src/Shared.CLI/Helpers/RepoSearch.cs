@@ -4,6 +4,7 @@ namespace Microsoft.CST.OpenSource.Shared
 {
     using Contracts;
     using Microsoft.CST.OpenSource.PackageManagers;
+    using Microsoft.CST.OpenSource.Model.SourceMapping;
     using PackageUrl;
     using System;
     using System.Collections.Generic;
@@ -47,12 +48,21 @@ namespace Microsoft.CST.OpenSource.Shared
         /// <returns> </returns>
         public async Task<Dictionary<PackageURL, double>> ResolvePackageLibraryAsync(PackageURL purl)
         {
-            Logger.Trace("ResolvePackageLibraryAsync({0})", purl);
+            IReadOnlyList<SourceRepositoryCandidate> candidates =
+                await ResolvePackageLibraryCandidatesAsync(purl);
+            return new SourceRepositoryCandidateSet(candidates).ToCompatibilityDictionary();
+        }
 
-            Dictionary<PackageURL, double>? repoMappings = new();
+        /// <summary>
+        /// Resolves source repository candidates while retaining their evidence.
+        /// </summary>
+        public async Task<IReadOnlyList<SourceRepositoryCandidate>> ResolvePackageLibraryCandidatesAsync(PackageURL purl)
+        {
+            Logger.Trace("ResolvePackageLibraryCandidatesAsync({0})", purl);
+
             if (purl == null)
             {
-                return repoMappings;
+                return Array.Empty<SourceRepositoryCandidate>();
             }
 
             PackageURL purlNoVersion = new(purl.Type, purl.Namespace, purl.Name,
@@ -64,19 +74,19 @@ namespace Microsoft.CST.OpenSource.Shared
 
             if (projectManager != null)
             {
-                repoMappings = await projectManager.IdentifySourceRepositoryAsync(purl);
+                IReadOnlyList<SourceRepositoryCandidate> candidates =
+                    await projectManager.IdentifySourceRepositoryCandidatesAsync(purl) ??
+                    Array.Empty<SourceRepositoryCandidate>();
 
-                if (repoMappings == null || !repoMappings.Any())
+                if (!candidates.Any())
                 {
-                    repoMappings = new Dictionary<PackageURL, double>();
                     Logger.Info("No repositories were found after searching metadata.");
                 }
+
+                return candidates;
             }
-            else
-            {
-                throw new ArgumentException("Invalid Package URL type: {0}", purlNoVersion.Type);
-            }
-            return repoMappings;
+
+            throw new ArgumentException("Invalid Package URL type: {0}", purlNoVersion.Type);
         }
 
         /// <summary>

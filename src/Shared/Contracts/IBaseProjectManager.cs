@@ -3,6 +3,7 @@
 namespace Microsoft.CST.OpenSource.Contracts;
 
 using Model;
+using Model.SourceMapping;
 using PackageUrl;
 using System;
 using System.Collections.Generic;
@@ -145,6 +146,16 @@ public interface IBaseProjectManager
     public List<Version> GetVersions(JsonDocument? metadata);
 
     /// <summary>
+    /// Identifies possible source repositories while retaining the evidence used to find them.
+    /// </summary>
+    /// <param name="purl">PackageURL to search.</param>
+    /// <param name="useCache">If cached package metadata should be used when available.</param>
+    /// <returns>Deduplicated source repository candidates in discovery order.</returns>
+    public Task<IReadOnlyList<SourceRepositoryCandidate>> IdentifySourceRepositoryCandidatesAsync(
+        PackageURL purl,
+        bool useCache = true);
+
+    /// <summary>
     /// Tries to find out the package repository from the metadata of the package. Check with
     /// the specific package manager, if they have any specific extraction to do, w.r.t the
     /// metadata. If they found some package specific well defined metadata, use that. If that
@@ -153,7 +164,7 @@ public interface IBaseProjectManager
     /// <param name="purl">PackageURL to search</param>
     /// <param name="useCache">If the source repository should be returned from the cache, if available.</param>
     /// <returns>
-    /// A dictionary, mapping each possible repo source entry to its probability/empty dictionary
+    /// A compatibility dictionary mapping each possible repository to its existing confidence score.
     /// </returns>
     public Task<Dictionary<PackageURL, double>> IdentifySourceRepositoryAsync(PackageURL purl, bool useCache = true);
 
