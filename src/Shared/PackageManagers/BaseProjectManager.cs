@@ -147,12 +147,18 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                     }
                 }
             }
-            catch (Exception)
+            catch (OperationCanceledException)
+            {
+                // Always propagate cancellation, regardless of neverThrow.
+                throw;
+            }
+            catch (Exception ex)
             {
                 if (!neverThrow)
                 {
                     throw;
                 }
+                Logger.Debug(ex, "Suppressed error fetching {0}: {1}", OssUtilities.RedactUrlCredentials(uri), ex.Message);
             }
 
             return resultString;
@@ -174,14 +180,19 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 _ = await GetHttpStringCache(client, url, useCache);
                 return true;
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception e)
             {
+                string redactedUrl = OssUtilities.RedactUrlCredentials(url) ?? url;
                 if (e is HttpRequestException { StatusCode: System.Net.HttpStatusCode.NotFound })
                 {
-                    Logger.Trace("Package not found at: {0}", url);
+                    Logger.Trace("Package not found at: {0}", redactedUrl);
                     return false;
                 }
-                Logger.Debug("Unable to check if package {1} exists: {0}", e.Message, url);
+                Logger.Debug("Unable to check if package exists at {0}: {1}", redactedUrl, e.Message);
             }
             return false;
         }
@@ -203,14 +214,19 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 _ = await GetJsonCache(client, url, useCache, jsonParsingOption);
                 return true;
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception e)
             {
+                string redactedUrl = OssUtilities.RedactUrlCredentials(url) ?? url;
                 if (e is HttpRequestException { StatusCode: System.Net.HttpStatusCode.NotFound })
                 {
-                    Logger.Trace("Package not found at: {0}", url);
+                    Logger.Trace("Package not found at: {0}", redactedUrl);
                     return false;
                 }
-                Logger.Debug("Unable to check if package {1} exists: {0}", e.Message, url);
+                Logger.Debug("Unable to check if package exists at {0}: {1}", redactedUrl, e.Message);
             }
             return false;
         }
@@ -428,16 +444,31 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         {
             Logger.Trace("IdentifySourceRepository({0})", purl);
 
-            string rawMetadataString = await GetMetadataAsync(purl, useCache) ?? string.Empty;
+            string rawMetadataString;
+            try
+            {
+                rawMetadataString = await GetMetadataAsync(purl, useCache) ?? string.Empty;
+            }
+            catch (OperationCanceledException)
+            {
+                // Always propagate cancellation to the caller.
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Individual managers are expected to handle their own transient/HTTP failures and
+                // return null; this is a defensive fallback in case one doesn't.
+                Logger.Trace(ex, "Error fetching package metadata for {0}: {1}", purl, ex.Message);
+                rawMetadataString = string.Empty;
+            }
+
             Dictionary<PackageURL, double> sourceRepositoryMap = new();
 
             // Check the specific PackageManager-specific implementation first
             try
             {
-                foreach (KeyValuePair<PackageURL, double> result in await SearchRepoUrlsInPackageMetadata(purl, rawMetadataString))
-                {
-                    sourceRepositoryMap.Add(result.Key, result.Value);
-                }
+                Dictionary<PackageURL, double> managerResults = await SearchRepoUrlsInPackageMetadata(purl, rawMetadataString);
+                MergeSourceRepositoryCandidates(sourceRepositoryMap, managerResults);
 
                 // Return now if we've succeeded
                 if (sourceRepositoryMap.Any())
@@ -445,18 +476,46 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                     return sourceRepositoryMap;
                 }
             }
+            catch (OperationCanceledException)
+            {
+                // Always propagate cancellation to the caller.
+                throw;
+            }
+            catch (JsonException ex)
+            {
+                Logger.Trace(ex, "Malformed metadata encountered while searching package metadata for {0}: {1}", purl, ex.Message);
+            }
+            catch (HttpRequestException ex)
+            {
+                Logger.Trace(ex, "HTTP error while searching package metadata for {0}: {1}", purl, ex.Message);
+            }
             catch (Exception ex)
             {
                 Logger.Trace(ex, "Error searching package metadata for {0}: {1}", purl, ex.Message);
             }
 
             // Fall back to searching the metadata string for all possible GitHub URLs.
-            foreach (KeyValuePair<PackageURL, double> result in ExtractRankedSourceRepositories(purl, rawMetadataString))
-            {
-                sourceRepositoryMap.Add(result.Key, result.Value);
-            }
+            MergeSourceRepositoryCandidates(sourceRepositoryMap, ExtractRankedSourceRepositories(purl, rawMetadataString));
 
             return sourceRepositoryMap;
+        }
+
+        /// <summary>
+        /// Merges newly discovered source repository candidates into an existing map. When the same
+        /// candidate is produced more than once (e.g. by multiple metadata fields), the highest
+        /// confidence score is kept instead of throwing on a duplicate key.
+        /// </summary>
+        /// <param name="target">The map to merge results into.</param>
+        /// <param name="candidates">The newly discovered candidates.</param>
+        private static void MergeSourceRepositoryCandidates(Dictionary<PackageURL, double> target, IEnumerable<KeyValuePair<PackageURL, double>> candidates)
+        {
+            foreach (KeyValuePair<PackageURL, double> candidate in candidates)
+            {
+                if (!target.TryGetValue(candidate.Key, out double existingScore) || candidate.Value > existingScore)
+                {
+                    target[candidate.Key] = candidate.Value;
+                }
+            }
         }
 
         /// <inheritdoc />

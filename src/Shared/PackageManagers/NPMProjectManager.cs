@@ -380,9 +380,18 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 string? content = await GetHttpStringCache(httpClient, $"{ENV_NPM_API_ENDPOINT}/{packageName}", useCache);
                 return content;
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (HttpRequestException ex)
+            {
+                Logger.Debug(ex, "HTTP error fetching NPM metadata for {0}: {1}", purl, ex.Message);
+                return null;
+            }
             catch (Exception ex)
             {
-                Logger.Debug(ex, $"Error fetching NPM metadata: {ex.Message}");
+                Logger.Debug(ex, "Error fetching NPM metadata for {0}: {1}", purl, ex.Message);
                 return null;
             }
         }
@@ -877,7 +886,17 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             {
                 return new Dictionary<PackageURL, double>();
             }
-            JsonDocument contentJSON = JsonDocument.Parse(metadata);
+
+            JsonDocument contentJSON;
+            try
+            {
+                contentJSON = JsonDocument.Parse(metadata);
+            }
+            catch (JsonException ex)
+            {
+                Logger.Debug(ex, "Malformed NPM metadata JSON for {0}: {1}", purl, ex.Message);
+                return new Dictionary<PackageURL, double>();
+            }
             return await SearchRepoUrlsInPackageMetadata(purl, contentJSON);
         }
 
@@ -891,8 +910,8 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             {
                 // url = 'https://github.com/nodejs/node/tree/master/lib' + package.name,
 
-                mapping.Add(new PackageURL(purl.Type, purl.Namespace, purl.Name,
-                    null, null, "node/tree/master/lib"), 1.0F);
+                mapping[new PackageURL(purl.Type, purl.Namespace, purl.Name,
+                    null, null, "node/tree/master/lib")] = 1.0F;
                 return mapping;
             }
 
@@ -922,13 +941,22 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                             PackageURL gitPURL = GitHubProjectManager.ParseUri(new Uri(repoURL));
                             // we got a repository value the author specified in the metadata - so no
                             // further processing needed
-                            mapping.Add(gitPURL, 1.0F);
+                            mapping[gitPURL] = 1.0F;
                             return mapping;
                         }
                     }
                 }
                 catch (KeyNotFoundException) { /* continue onwards */ }
-                catch (UriFormatException) {  /* the uri specified in the metadata invalid */ }
+                catch (UriFormatException ex)
+                {
+                    // the uri specified in the metadata is invalid
+                    Logger.Debug(ex, "Invalid repository URL in NPM metadata for {0}: {1}", purl, ex.Message);
+                }
+                catch (MalformedPackageUrlException ex)
+                {
+                    // the repository url couldn't be turned into a valid github PackageURL
+                    Logger.Debug(ex, "Malformed repository URL in NPM metadata for {0}: {1}", purl, ex.Message);
+                }
             }
 
             return mapping;

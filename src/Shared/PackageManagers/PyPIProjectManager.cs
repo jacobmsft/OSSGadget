@@ -289,9 +289,18 @@ namespace Microsoft.CST.OpenSource.PackageManagers
 
                 return await GetHttpStringCache(httpClient, $"{ENV_PYPI_ENDPOINT}/pypi/{purl.Name}/json", useCache);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (HttpRequestException ex)
+            {
+                Logger.Debug(ex, "HTTP error fetching PyPI metadata for {0}: {1}", purl, ex.Message);
+                return null;
+            }
             catch (Exception ex)
             {
-                Logger.Debug(ex, "Error fetching PyPI metadata: {0}", ex.Message);
+                Logger.Debug(ex, "Error fetching PyPI metadata for {0}: {1}", purl, ex.Message);
                 return null;
             }
         }
@@ -514,14 +523,24 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             if (purl.Name?.StartsWith('_') ?? false) // TODO: there are internal modules which do not start with _
             {
                 // TODO: internal modules could also be in https://github.com/python/cpython/tree/master/Modules/
-                mapping.Add(new PackageURL(purl.Type, purl.Namespace, purl.Name, null, null, "cpython/tree/master/Lib/"), 1.0F);
+                mapping[new PackageURL(purl.Type, purl.Namespace, purl.Name, null, null, "cpython/tree/master/Lib/")] = 1.0F;
                 return mapping;
             }
             if (string.IsNullOrEmpty(metadata))
             {
                 return mapping;
             }
-            JsonDocument contentJSON = JsonDocument.Parse(metadata);
+
+            JsonDocument contentJSON;
+            try
+            {
+                contentJSON = JsonDocument.Parse(metadata);
+            }
+            catch (JsonException ex)
+            {
+                Logger.Debug(ex, "Malformed PyPI metadata JSON for {0}: {1}", purl, ex.Message);
+                return mapping;
+            }
 
             List<string> possibleLocationProperties = new() { "home_page", "download_url" };
 
@@ -530,33 +549,40 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             {
                 infoJSON = contentJSON.RootElement.GetProperty("info");
             }
-            catch (Exception)
+            catch (KeyNotFoundException ex)
             {
+                Logger.Debug(ex, "PyPI metadata for {0} is missing the 'info' field: {1}", purl, ex.Message);
+                return mapping;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // The root element wasn't an object (e.g. malformed metadata).
+                Logger.Debug(ex, "PyPI metadata for {0} had an unexpected shape: {1}", purl, ex.Message);
                 return mapping;
             }
 
             foreach (JsonProperty property in infoJSON.EnumerateObject())
             {
-                if (possibleLocationProperties.Contains(property.Name.ToLower()) && property.Value.ToString() is {} url)
+                if (possibleLocationProperties.Contains(property.Name.ToLower()) && property.Value.ToString() is { } url)
                 {
                     IEnumerable<PackageURL>? packageUrls = GitHubProjectManager.ExtractGitHubPackageURLs(url);
                     // if we were not able to extract a github url, continue
-                    if (packageUrls.FirstOrDefault() is {} packageUrl)
+                    if (packageUrls.FirstOrDefault() is { } packageUrl)
                     {
-                        mapping.Add(packageUrl, 1.0F);
+                        mapping[packageUrl] = 1.0F;
                         return mapping;
                     }
                 }
 
-                try
+                // See https://setuptools.pypa.io/en/latest/references/keywords.html
+                // project_urls is a map of arbitrary strings to strings (values are expected to be urls)
+                // The key name is arbitrary, so we can check all the keys and if any are detected as repository urls,
+                //   that should be what we are looking for.
+                if (property.Name.Equals("project_urls") && property.Value.ValueKind == JsonValueKind.Object)
                 {
-                    // See https://setuptools.pypa.io/en/latest/references/keywords.html
-                    // project_urls is a map of arbitrary strings to strings (values are expected to be urls)
-                    // The key name is arbitrary, so we can check all the keys and if any are detected as repository urls,
-                    //   that should be what we are looking for.
-                    if (property.Name.Equals("project_urls"))
+                    foreach (JsonProperty projectUrl in property.Value.EnumerateObject())
                     {
-                        foreach (JsonProperty projectUrl in property.Value.EnumerateObject())
+                        try
                         {
                             if (projectUrl.Value.ToString() is { } possibleGitHubUrl)
                             {
@@ -565,20 +591,17 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                                 // if we were able to extract a github url, return
                                 if (packageUrls.FirstOrDefault() is { } packageUrl)
                                 {
-                                    mapping.Add(packageUrl, 1.0F);
+                                    mapping[packageUrl] = 1.0F;
                                     return mapping;
                                 }
                             }
                         }
+                        catch (Exception ex)
+                        {
+                            // A single malformed project_urls entry shouldn't stop us from checking the rest.
+                            Logger.Debug(ex, "Error parsing project_urls entry '{0}' for {1}: {2}", projectUrl.Name, purl, ex.Message);
+                        }
                     }
-                }
-                catch (ObjectDisposedException)
-                {
-                    break;
-                }
-                catch (Exception)
-                {
-                    continue;
                 }
             }
 

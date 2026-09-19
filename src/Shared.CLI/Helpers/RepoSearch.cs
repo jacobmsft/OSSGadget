@@ -64,7 +64,20 @@ namespace Microsoft.CST.OpenSource.Shared
 
             if (projectManager != null)
             {
-                repoMappings = await projectManager.IdentifySourceRepositoryAsync(purl);
+                try
+                {
+                    repoMappings = await projectManager.IdentifySourceRepositoryAsync(purl);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Always propagate cancellation to the caller.
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn(ex, "Error identifying source repository for {0}: {1}", purlNoVersion, ex.Message);
+                    repoMappings = new Dictionary<PackageURL, double>();
+                }
 
                 if (repoMappings == null || !repoMappings.Any())
                 {
@@ -74,7 +87,9 @@ namespace Microsoft.CST.OpenSource.Shared
             }
             else
             {
-                throw new ArgumentException("Invalid Package URL type: {0}", purlNoVersion.Type);
+                string purlType = purlNoVersion.Type ?? "(unknown)";
+                Logger.Warn("Unsupported package URL type for source search: {0}", purlType);
+                throw new ArgumentException($"Invalid Package URL type: {purlType}", nameof(purl));
             }
             return repoMappings;
         }
