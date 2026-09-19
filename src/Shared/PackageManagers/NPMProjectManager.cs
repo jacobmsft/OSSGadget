@@ -913,16 +913,15 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                     }
                     if (repository.ValueKind == JsonValueKind.Object)
                     {
-                        string? repoType = OssUtilities.GetJSONPropertyStringIfExists(repository, "type")?.ToLower();
                         string? repoURL = OssUtilities.GetJSONPropertyStringIfExists(repository, "url");
 
-                        // right now we deal with only github repos
-                        if (repoType == "git" && repoURL is not null)
+                        // Normalize supported forge URLs consistently across package managers.
+                        if (repoURL is not null &&
+                            RepositoryUrlParser.TryParse(repoURL, out PackageURL? gitPURL))
                         {
-                            PackageURL gitPURL = GitHubProjectManager.ParseUri(new Uri(repoURL));
                             // we got a repository value the author specified in the metadata - so no
                             // further processing needed
-                            mapping.Add(gitPURL, 1.0F);
+                            mapping.Add(gitPURL!, 1.0F);
                             return mapping;
                         }
                     }

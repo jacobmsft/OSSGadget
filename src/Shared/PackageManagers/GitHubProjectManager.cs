@@ -44,25 +44,8 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         /// <returns> </returns>
         public static IEnumerable<PackageURL> ExtractGitHubUris(PackageURL purl, string searchText)
         {
-            List<PackageURL> repositoryList = new();
-            if (string.IsNullOrEmpty(searchText))
-            {
-                return repositoryList;
-            }
-
-            try
-            {
-                foreach (Match match in GithubExtractorRegex.Matches(searchText).Where(match => match != null))
-                {
-                    repositoryList.Add(new PackageURL("github", match.Groups["user"].Value, match.Groups["repo"].Value, null, null, null));
-                }
-            }
-            catch (UriFormatException ex)
-            {
-                Logger.Debug(ex, "Error matching regular expression: {0}", ex.Message);
-                /* that was an invalid url, ignore */
-            }
-            return repositoryList;
+            return RepositoryUrlParser.Extract(searchText)
+                .Where(packageUrl => packageUrl.Type.Equals(Type, StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>
@@ -72,16 +55,11 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         /// <returns>PackageURL object for the provided Uri</returns>
         public static PackageURL ParseUri(Uri uri)
         {
-            Match match = GithubMatchRegex.Match(uri.AbsoluteUri);
-            GroupCollection matches = match.Groups;
-            PackageURL packageURL = new(
-                "github",
-                matches["namespace"].Value,
-                matches["name"].Value,
-                /* version doesnt make sense for source repo */ null,
-                null,
-                string.IsNullOrEmpty(matches["subpath"].Value) ? null : matches["subpath"].Value);
-            return packageURL;
+            if (uri is null || !RepositoryUrlParser.TryParse(uri.AbsoluteUri, out PackageURL? packageUrl))
+            {
+                throw new UriFormatException($"'{uri}' is not a supported repository URL.");
+            }
+            return packageUrl!;
         }
 
         /// <summary>
@@ -272,60 +250,14 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             Check.NotNull(nameof(url), url);
             purl = null;
 
-            if (url.Contains(DEFAULT_GITHUB_ENDPOINT))
+            if (RepositoryUrlParser.TryParse(url, out PackageURL? parsed) &&
+                parsed?.Type.Equals(Type, StringComparison.OrdinalIgnoreCase) == true)
             {
-                try
-                {
-                    purl = ParseUri(new Uri(url));
-                }
-                catch (ArgumentException)
-                {
-                    return false;
-                }
-
+                purl = parsed;
                 return true;
             }
             return false;
         }
 
-        private static readonly Regex GithubExtractorRegex = new(
-            @"(?<protocol>https?|git|ssh|rsync)\://" +
-            @"(?:(?<user>.{1,255})@){0,1}" +
-            @"(github\.com)" +
-            @"[:/]*" +
-            @"(?<port>[\d]{1,10}){0,1}" +
-            @"(?<pathname>\/((?<namespace>[\w\-]{1,39})\/)?" + // GitHub Username Limit is 39
-            @"((?<name>[\w\-\.]{1,250}?)(\.git|\/)?)?)$" + // GitHub Repository name limit is 250
-            @"|" +
-            @"(git\+)?" +
-            @"((?<protocol>\w{1,20})://)" +
-            @"(?:(?<user>.{1,255})@){0,1}" +
-            @"(github\.com)" +
-            @"(?<port>[\d]{1,10}){0,1}" +
-            @"(?<pathname>\/((?<namespace>[\w\-]{1,39})\/)?" + // GitHub Username Limit is 39
-            @"((?<name>[\w\-\.]{1,250}?)(\.git|\/)?)?)$", // GitHub Repository name limit is 250
-                RegexOptions.Compiled);
-
-        /// <summary>
-        ///     Regular expression that matches possible GitHub URLs
-        /// </summary>
-        // Based on https://github.com/coala/git-url-parse/blob/d3eac95b21b2b166562e657fdfd974545653dfcc/giturlparse/parser.py#L38-L62
-        private static readonly Regex GithubMatchRegex = new(
-            @"(?<protocol>https?|git|ssh|rsync)\://" +
-            @"(?:(?<user>.{1,255})@){0,1}" +
-            @"(?<resource>[a-z0-9_.-]{0,253})" + // Hostname limit is 253
-            @"[:/]*" +
-            @"(?<port>[\d]{1,10}){0,1}" +
-            @"(?<pathname>\/((?<namespace>[\w\-]{1,39})\/)?" + // GitHub Username Limit is 39
-            @"((?<name>[\w\-\.]{1,250}?)(\.git|\/)?)?)$" + // GitHub Repository name limit is 250
-            @"|" +
-            @"(git\+)?" +
-            @"((?<protocol>\w{1,10})://)" +
-            @"(?:(?<user>.{1,255})@){0,1}" +
-            @"((?<resource>[\w\.\-]{0,253}))" + // Hostname limit is 253
-            @"(?<port>[\d]{1,10}){0,1}" +
-            @"(?<pathname>/((?<namespace>[\w\-]{1,39})\/)?" + // GitHub Username Limit is 39
-            @"((?<name>[\w\-\.]{1,250}?)(\.git|\/)?)?)$", // GitHub Repository name limit is 250
-            RegexOptions.Singleline | RegexOptions.Compiled);
     }
 }
