@@ -214,9 +214,11 @@ namespace Microsoft.CST.OpenSource
                     Dictionary<PackageURL, double>? sourceMap = await findSourceTool.FindSourceAsync(purl);
                     if (sourceMap.Any())
                     {
-                        List<KeyValuePair<PackageURL, double>>? sourceMapList = sourceMap.ToList();
-                        sourceMapList.Sort((a, b) => a.Value.CompareTo(b.Value));
-                        PackageURL? bestSourcePurl = sourceMapList.Last().Key;
+                        PackageURL? bestSourcePurl = sourceMap
+                            .OrderByDescending(result => result.Value)
+                            .ThenBy(result => result.Key.ToString(), StringComparer.OrdinalIgnoreCase)
+                            .ThenBy(result => result.Key.ToString(), StringComparer.Ordinal)
+                            .First().Key;
                         if (string.IsNullOrEmpty(bestSourcePurl.Version))
                         {
                             // Tie back the original version to the new PackageURL

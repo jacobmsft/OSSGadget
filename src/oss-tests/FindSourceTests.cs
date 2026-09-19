@@ -2,17 +2,117 @@
 
 namespace Microsoft.CST.OpenSource.Tests;
 
+using Contracts;
 using PackageManagers;
 using PackageUrl;
 using Microsoft.CodeAnalysis.Sarif;
+using Microsoft.CST.OpenSource.Model.SourceMapping;
 using Microsoft.CST.OpenSource.Shared;
+using Moq;
 using Newtonsoft.Json;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
 public class FindSourceTests
 {
+    [Fact]
+    public async Task SourceDiscoveryPipeline_ExecutesStagesInOrderAndAggregatesCandidates()
+    {
+        List<string> executionOrder = new();
+        SourceDiscoveryPipeline pipeline = new(new ISourceDiscoveryStage[]
+        {
+            new RecordingDiscoveryStage("ecosystem", executionOrder,
+                CreateCandidate("pkg:github/contoso/ecosystem", 0.9, "ecosystem")),
+            new RecordingDiscoveryStage("generic", executionOrder,
+                CreateCandidate("pkg:github/contoso/generic", 0.8, "generic")),
+        });
+
+        IReadOnlyList<SourceRepositoryCandidate> candidates = await pipeline.DiscoverAsync(CreateSourceDiscoveryContext());
+
+        Assert.Equal(new[] { "ecosystem", "generic" }, executionOrder);
+        Assert.Equal(new[]
+        {
+            "pkg:github/contoso/ecosystem",
+            "pkg:github/contoso/generic",
+        }, candidates.Select(candidate => candidate.ToPackageUrl().ToString()));
+    }
+
+    [Fact]
+    public async Task CandidateDeduplicationStage_RetainsHighestScoringCandidate()
+    {
+        PackageURL duplicate = new("pkg:github/contoso/repository");
+        CandidateDeduplicationStage stage = new();
+
+        IReadOnlyList<SourceRepositoryCandidate> candidates = await stage.ExecuteAsync(
+            CreateSourceDiscoveryContext(),
+            new[]
+            {
+                CreateCandidate(duplicate.ToString(), 0.5, "ecosystem"),
+                CreateCandidate(duplicate.ToString(), 0.9, "generic"),
+            });
+
+        SourceRepositoryCandidate candidate = Assert.Single(candidates);
+        Assert.Equal(0.9, candidate.Confidence);
+        Assert.Equal(2, candidate.Evidence.Count);
+    }
+
+    [Fact]
+    public async Task SourceDiscoveryPipeline_ReturnsEmptyResults()
+    {
+        SourceDiscoveryPipeline pipeline = new(Array.Empty<ISourceDiscoveryStage>());
+
+        IReadOnlyList<SourceRepositoryCandidate> candidates = await pipeline.DiscoverAsync(CreateSourceDiscoveryContext());
+
+        Assert.Empty(candidates);
+    }
+
+    [Fact]
+    public async Task RepoSearch_AggregatesEcosystemAndGenericMetadataCandidates()
+    {
+        PackageURL package = new("pkg:npm/example");
+        PackageURL ecosystemRepository = new("pkg:github/contoso/ecosystem");
+        Mock<IBaseProjectManager> manager = new();
+        manager.Setup(m => m.IdentifySourceRepositoryCandidatesAsync(package, true))
+            .ReturnsAsync(new[] { CreateCandidate(ecosystemRepository.ToString(), 0.9, "ecosystem") });
+        manager.Setup(m => m.GetMetadataAsync(package, true))
+            .ReturnsAsync("https://github.com/contoso/generic");
+        Mock<IProjectManagerFactory> factory = new();
+        factory.Setup(f => f.CreateProjectManager(package, ".", null)).Returns(manager.Object);
+
+        RepoSearch search = new(factory.Object);
+        Dictionary<PackageURL, double> candidates = await search.ResolvePackageLibraryAsync(package);
+
+        Assert.Equal(new[]
+        {
+            "pkg:github/contoso/ecosystem",
+            "pkg:github/contoso/generic",
+        }, candidates.Keys.Select(candidate => candidate.ToString()));
+    }
+
+    [Fact]
+    public async Task DeterministicRankingStage_SortsByScoreThenPackageUrl()
+    {
+        DeterministicRankingStage stage = new();
+
+        IReadOnlyList<SourceRepositoryCandidate> candidates = await stage.ExecuteAsync(
+            CreateSourceDiscoveryContext(),
+            new[]
+            {
+                CreateCandidate("pkg:github/contoso/zulu", 0.8, "test"),
+                CreateCandidate("pkg:github/contoso/bravo", 0.9, "test"),
+                CreateCandidate("pkg:github/contoso/alpha", 0.8, "test"),
+            });
+
+        Assert.Equal(new[]
+        {
+            "pkg:github/contoso/bravo",
+            "pkg:github/contoso/alpha",
+            "pkg:github/contoso/zulu",
+        }, candidates.Select(candidate => candidate.ToPackageUrl().ToString()));
+    }
+
     [Theory]
     [InlineData("pkg:npm/md5", "https://github.com/pvorb/node-md5")]
     public async Task Check_Sarif(string purl, string targetResult)
@@ -106,5 +206,45 @@ public class FindSourceTests
             }
         }
         Assert.True(success, $"Result {targetResult} not found from {purl}");
+    }
+
+    private static SourceDiscoveryContext CreateSourceDiscoveryContext() =>
+        new(new PackageURL("pkg:npm/example"), new Mock<IBaseProjectManager>().Object);
+
+    private static SourceRepositoryCandidate CreateCandidate(string purl, double confidence, string sourceField) =>
+        new(
+            new SourceRepositoryIdentity(new PackageURL(purl)),
+            new[]
+            {
+                new SourceRepositoryEvidence(
+                    SourceRepositoryEvidenceKind.Unknown,
+                    sourceField,
+                    purl)
+            },
+            confidence);
+
+    private sealed class RecordingDiscoveryStage : ISourceDiscoveryStage
+    {
+        private readonly string _name;
+        private readonly List<string> _executionOrder;
+        private readonly SourceRepositoryCandidate _candidate;
+
+        public RecordingDiscoveryStage(
+            string name,
+            List<string> executionOrder,
+            SourceRepositoryCandidate candidate)
+        {
+            _name = name;
+            _executionOrder = executionOrder;
+            _candidate = candidate;
+        }
+
+        public Task<IReadOnlyList<SourceRepositoryCandidate>> ExecuteAsync(
+            SourceDiscoveryContext context,
+            IReadOnlyList<SourceRepositoryCandidate> candidates)
+        {
+            _executionOrder.Add(_name);
+            return Task.FromResult<IReadOnlyList<SourceRepositoryCandidate>>(candidates.Append(_candidate).ToList());
+        }
     }
 }

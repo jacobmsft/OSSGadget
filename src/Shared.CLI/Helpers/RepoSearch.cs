@@ -31,12 +31,15 @@ namespace Microsoft.CST.OpenSource.Shared
         /// Initializes a new instance of the <see cref="RepoSearch"/> class.
         /// </summary>
         /// <param name="projectManagerFactory">The <see cref="ProjectManagerFactory"/> to generate the project managers with.</param>
-        public RepoSearch(ProjectManagerFactory projectManagerFactory)
+        public RepoSearch(IProjectManagerFactory projectManagerFactory, SourceDiscoveryPipeline? pipeline = null)
         {
             _projectManagerFactory = projectManagerFactory;
+            _pipeline = pipeline ?? SourceDiscoveryPipeline.CreateDefault();
         }
 
-        private ProjectManagerFactory _projectManagerFactory { get; }
+        private IProjectManagerFactory _projectManagerFactory { get; }
+
+        private SourceDiscoveryPipeline _pipeline { get; }
 
         /// <summary>
         ///     try to resolve the source code for an npm package through different means
@@ -75,12 +78,11 @@ namespace Microsoft.CST.OpenSource.Shared
             if (projectManager != null)
             {
                 IReadOnlyList<SourceRepositoryCandidate> candidates =
-                    await projectManager.IdentifySourceRepositoryCandidatesAsync(purl) ??
-                    Array.Empty<SourceRepositoryCandidate>();
+                    await _pipeline.DiscoverAsync(new SourceDiscoveryContext(purl, projectManager));
 
                 if (!candidates.Any())
                 {
-                    Logger.Info("No repositories were found after searching metadata.");
+                    Logger.Info("No repositories were found after source discovery.");
                 }
 
                 return candidates;
