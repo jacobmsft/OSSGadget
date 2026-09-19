@@ -77,8 +77,21 @@ namespace Microsoft.CST.OpenSource.Shared
 
             if (projectManager != null)
             {
-                IReadOnlyList<SourceRepositoryCandidate> candidates =
-                    await _pipeline.DiscoverAsync(new SourceDiscoveryContext(purl, projectManager));
+                IReadOnlyList<SourceRepositoryCandidate> candidates;
+                try
+                {
+                    candidates = await _pipeline.DiscoverAsync(new SourceDiscoveryContext(purl, projectManager));
+                }
+                catch (OperationCanceledException)
+                {
+                    // Always propagate cancellation to the caller.
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn(ex, "Error identifying source repository for {0}: {1}", purlNoVersion, ex.Message);
+                    candidates = Array.Empty<SourceRepositoryCandidate>();
+                }
 
                 if (!candidates.Any())
                 {
@@ -88,7 +101,9 @@ namespace Microsoft.CST.OpenSource.Shared
                 return candidates;
             }
 
-            throw new ArgumentException("Invalid Package URL type: {0}", purlNoVersion.Type);
+            string purlType = purlNoVersion.Type ?? "(unknown)";
+            Logger.Warn("Unsupported package URL type for source search: {0}", purlType);
+            throw new ArgumentException($"Invalid Package URL type: {purlType}", nameof(purl));
         }
 
         /// <summary>

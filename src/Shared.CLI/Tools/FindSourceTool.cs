@@ -85,6 +85,11 @@ namespace Microsoft.CST.OpenSource
 
                 return candidates;
             }
+            catch (OperationCanceledException)
+            {
+                // Always propagate cancellation to the caller.
+                throw;
+            }
             catch (Exception ex)
             {
                 Logger.Warn(ex, "Error identifying source repository for {0}: {1}", purl, ex.Message);
@@ -219,6 +224,13 @@ namespace Microsoft.CST.OpenSource
                         Dictionary<PackageURL, double> dictionary = await FindSourceAsync(purl);
                         List<KeyValuePair<PackageURL, double>> results =
                             SourceRepositoryConfidencePolicy.OrderMappings(dictionary).ToList();
+
+                        if (results.Count == 0)
+                        {
+                            Logger.Warn("No source repository candidates found for {0}", target);
+                            continue;
+                        }
+
                         if (findSourceToolOptions.Single)
                         {
                             AppendSingleOutput(outputBuilder, purl, results[0]);
@@ -227,6 +239,11 @@ namespace Microsoft.CST.OpenSource
                         {
                             AppendOutput(outputBuilder, purl, results);
                         }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Always propagate cancellation to the caller.
+                        throw;
                     }
                     catch (Exception ex)
                     {

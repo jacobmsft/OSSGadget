@@ -8,6 +8,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
     using Contracts;
     using Helpers;
     using PackageUrl;
+    using Microsoft.Extensions.Caching.Memory;
     using Model;
     using Model.Metadata;
     using NuGet.Packaging;
@@ -95,15 +96,23 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                             }
                         }
                     }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
                     catch (Exception ex)
                     {
-                        Logger.Debug(ex, "Error parsing NuGet API endpoint: {0}", ex.Message);
+                        Logger.Debug(ex, "Error parsing NuGet API endpoint resource: {0}", ex.Message);
                     }
                 }
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                Logger.Debug(ex, "Error parsing NuGet API endpoint: {0}", ex.Message);
+                Logger.Debug(ex, "Error fetching NuGet API endpoint index: {0}", ex.Message);
             }
             RegistrationEndpoint = NUGET_DEFAULT_REGISTRATION_ENDPOINT;
             return RegistrationEndpoint;
@@ -149,9 +158,13 @@ namespace Microsoft.CST.OpenSource.PackageManagers
 
                 return JsonSerializer.Serialize(packageVersionMetadata);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                Logger.Debug(ex, $"Error fetching NuGet metadata: {ex.Message}");
+                Logger.Debug(ex, "Error fetching NuGet metadata for {0}: {1}", purl, ex.Message);
                 return null;
             }
         }
@@ -307,7 +320,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         /// <param name="metadata">The <see cref="PackageMetadata"/> object to update with the values for this version.</param>
         private async Task UpdateMetadataRepository(PackageMetadata metadata)
         {
-            NuspecReader? nuspecReader = GetNuspec(metadata.Name!, metadata.PackageVersion!);
+            NuspecReader? nuspecReader = await GetNuspecAsync(metadata.Name!, metadata.PackageVersion!);
             RepositoryMetadata? repositoryMetadata = nuspecReader?.GetRepositoryMetadata();
 
             if (repositoryMetadata != null &&
@@ -365,58 +378,133 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         protected override async Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
         {
             Dictionary<PackageURL, double> mapping = new();
-            try
+
+            string? version = purl.Version;
+            if (string.IsNullOrEmpty(version))
             {
-                string? version = purl.Version;
-                if (string.IsNullOrEmpty(version))
+                try
                 {
-                    version = (await EnumerateVersionsAsync(purl)).First();
+                    version = (await EnumerateVersionsAsync(purl)).FirstOrDefault();
                 }
-                NuspecReader? nuspecReader = GetNuspec(purl.Name, version);
-                RepositoryMetadata? repositoryMetadata = nuspecReader?.GetRepositoryMetadata();
-                if (repositoryMetadata != null &&
-                    RepositoryUrlParser.TryParse(repositoryMetadata.Url, out PackageURL? repositoryPurl))
+                catch (OperationCanceledException)
                 {
-                    if (repositoryPurl != null)
-                    {
-                        mapping[repositoryPurl] = SourceRepositoryConfidencePolicy.Rank(
-                            purl,
-                            repositoryPurl,
-                            new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.RequestedVersionAuthoritativeRepository)
-                            {
-                                IsRootPath = string.IsNullOrEmpty(repositoryPurl.Subpath),
-                                IsMalformed = string.IsNullOrWhiteSpace(repositoryPurl.Namespace) || string.IsNullOrWhiteSpace(repositoryPurl.Name),
-                            });
-                    }
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Debug(ex, "Error enumerating NuGet versions for {0}: {1}", purl.Name, ex.Message);
+                    return mapping;
                 }
 
+                if (string.IsNullOrEmpty(version))
+                {
+                    Logger.Debug("No versions found for NuGet package {0}; cannot resolve source repository.", purl.Name);
+                    return mapping;
+                }
+            }
+
+            NuspecReader? nuspecReader = await GetNuspecAsync(purl.Name, version);
+            if (nuspecReader is null)
+            {
                 return mapping;
+            }
+
+            try
+            {
+                RepositoryMetadata? repositoryMetadata = nuspecReader.GetRepositoryMetadata();
+                if (repositoryMetadata != null &&
+                    RepositoryUrlParser.TryParse(repositoryMetadata.Url, out PackageURL? repositoryPurl) &&
+                    repositoryPurl != null)
+                {
+                    mapping[repositoryPurl] = SourceRepositoryConfidencePolicy.Rank(
+                        purl,
+                        repositoryPurl,
+                        new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.RequestedVersionAuthoritativeRepository)
+                        {
+                            IsRootPath = string.IsNullOrEmpty(repositoryPurl.Subpath),
+                            IsMalformed = string.IsNullOrWhiteSpace(repositoryPurl.Namespace) ||
+                                string.IsNullOrWhiteSpace(repositoryPurl.Name),
+                        });
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
-                Logger.Debug(ex, $"Error fetching/parsing NuGet repository metadata: {ex.Message}");
+                Logger.Debug(ex, "Error parsing NuGet repository metadata for {0}: {1}", purl.Name, ex.Message);
             }
 
-            // If nothing worked, return the default empty dictionary
             return mapping;
         }
 
-        private NuspecReader? GetNuspec(string id, string version)
+        /// <summary>
+        /// Fetches and parses the .nuspec file for a given package id/version, using the same
+        /// bounded, time-limited <see cref="DataCache"/> as the rest of the registry metadata lookups.
+        /// </summary>
+        /// <param name="id">The id/name of the package to get the .nuspec for.</param>
+        /// <param name="version">The version of the package to get the .nuspec for.</param>
+        /// <param name="useCache">If cache should be used.</param>
+        /// <returns>The parsed <see cref="NuspecReader"/>, or null if it could not be fetched/parsed.</returns>
+        private async Task<NuspecReader?> GetNuspecAsync(string id, string version, bool useCache = true)
         {
             string lowerId = id.ToLowerInvariant();
             string lowerVersion = NuGetVersion.Parse(version).ToNormalizedString().ToLowerInvariant();
             string uri = GetNuspecUrl(lowerId, lowerVersion);
+            string cacheKey = $"{uri}/nuspec-bytes";
+
             try
             {
-                HttpClient httpClient = this.CreateHttpClient();
-                HttpResponseMessage response = httpClient.GetAsync(uri).GetAwaiter().GetResult();
-                using (Stream stream = response.Content.ReadAsStreamAsync().GetAwaiter().GetResult())
+                byte[]? nuspecBytes = null;
+                if (useCache)
                 {
-                    return new NuspecReader(stream);
+                    lock (DataCache)
+                    {
+                        if (DataCache.TryGetValue(cacheKey, out byte[] cachedBytes))
+                        {
+                            nuspecBytes = cachedBytes;
+                        }
+                    }
                 }
+
+                if (nuspecBytes is null)
+                {
+                    HttpClient httpClient = CreateHttpClient();
+                    HttpResponseMessage response = await httpClient.GetAsync(uri);
+                    response.EnsureSuccessStatusCode();
+                    nuspecBytes = await response.Content.ReadAsByteArrayAsync();
+
+                    if (useCache)
+                    {
+                        lock (DataCache)
+                        {
+                            MemoryCacheEntryOptions mce = new()
+                            {
+                                Size = nuspecBytes.Length,
+                                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30),
+                            };
+                            DataCache.Set(cacheKey, nuspecBytes, mce);
+                        }
+                    }
+                }
+
+                using MemoryStream stream = new(nuspecBytes);
+                return new NuspecReader(stream);
             }
-            catch
+            catch (OperationCanceledException)
             {
+                throw;
+            }
+            catch (HttpRequestException ex)
+            {
+                Logger.Debug(ex, "HTTP error fetching NuGet nuspec for {0}@{1}: {2}", id, version, ex.Message);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                // Covers XML parsing failures (e.g. PackagingException) from a malformed .nuspec.
+                Logger.Debug(ex, "Error parsing NuGet nuspec for {0}@{1}: {2}", id, version, ex.Message);
                 return null;
             }
         }

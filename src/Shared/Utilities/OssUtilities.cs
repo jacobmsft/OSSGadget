@@ -114,5 +114,27 @@ namespace Microsoft.CST.OpenSource.Utilities
             string result = new((s.Select(ch => invalidChars.Contains(ch) ? '_' : ch) ?? Array.Empty<char>()).ToArray());
             return result;
         }
+
+        /// <summary>
+        /// Removes any embedded userinfo (e.g. username/password or access token) from a URL before
+        /// it is written to logs, so credentials for private feeds are never leaked.
+        /// </summary>
+        /// <param name="url">The URL (or arbitrary string) to redact.</param>
+        /// <returns>The URL with any userinfo component removed, or the original value if it isn't a valid absolute URL.</returns>
+        public static string? RedactUrlCredentials(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return url;
+            }
+
+            if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) || string.IsNullOrEmpty(uri.UserInfo))
+            {
+                return url;
+            }
+
+            UriBuilder builder = new(uri) { UserName = string.Empty, Password = string.Empty };
+            return builder.Uri.ToString();
+        }
     }
 }
