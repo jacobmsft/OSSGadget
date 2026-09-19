@@ -310,17 +310,18 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             NuspecReader? nuspecReader = GetNuspec(metadata.Name!, metadata.PackageVersion!);
             RepositoryMetadata? repositoryMetadata = nuspecReader?.GetRepositoryMetadata();
 
-            if (repositoryMetadata != null && GitHubProjectManager.IsGitHubRepoUrl(repositoryMetadata.Url, out PackageURL? githubPurl))
+            if (repositoryMetadata != null &&
+                RepositoryUrlParser.TryParse(repositoryMetadata.Url, out PackageURL? repositoryPurl))
             {
-                Repository ghRepository = new()
+                Repository repository = new()
                 {
-                    Type = "github"
+                    Type = repositoryPurl!.Type
                 };
 
-                await ghRepository.ExtractRepositoryMetadata(githubPurl!);
+                await repository.ExtractRepositoryMetadata(repositoryPurl);
 
                 metadata.Repository ??= new List<Repository>();
-                metadata.Repository.Add(ghRepository);
+                metadata.Repository.Add(repository);
             }
         }
 
@@ -373,11 +374,12 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 }
                 NuspecReader? nuspecReader = GetNuspec(purl.Name, version);
                 RepositoryMetadata? repositoryMetadata = nuspecReader?.GetRepositoryMetadata();
-                if (repositoryMetadata != null && GitHubProjectManager.IsGitHubRepoUrl(repositoryMetadata.Url, out PackageURL? githubPurl))
+                if (repositoryMetadata != null &&
+                    RepositoryUrlParser.TryParse(repositoryMetadata.Url, out PackageURL? repositoryPurl))
                 {
-                    if (githubPurl != null)
+                    if (repositoryPurl != null)
                     {
-                        mapping.Add(githubPurl, 1.0F);
+                        mapping.Add(repositoryPurl, 1.0F);
                     }
                 }
 

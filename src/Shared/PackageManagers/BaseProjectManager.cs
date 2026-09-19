@@ -3,6 +3,7 @@
 namespace Microsoft.CST.OpenSource.PackageManagers
 {
     using Contracts;
+    using F23.StringSimilarity;
     using Helpers;
     using Microsoft.Extensions.Caching.Memory;
     using Microsoft.CST.OpenSource.Model;
@@ -63,45 +64,8 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         public static IEnumerable<PackageURL> ExtractGitHubPackageURLs(string content)
         {
             Logger.Trace("ExtractGitHubPackageURLs({0})", content?.Take(30));
-
-            if (string.IsNullOrWhiteSpace(content))
-            {
-                Logger.Debug("Content was empty; nothing to do.");
-                return Array.Empty<PackageURL>();
-            }
-            List<PackageURL> purlList = new();
-
-            // @TODO: Check the regex below; does this match GitHub's scheme?
-            Regex githubRegex = new(@"github\.com/([a-z0-9\-_\.]+)/([a-z0-9\-_\.]+)",
-                                        RegexOptions.IgnoreCase);
-            foreach (Match match in githubRegex.Matches(content).Where(match => match != null))
-            {
-                string user = match.Groups[1].Value;
-                string repo = match.Groups[2].Value;
-
-                if (repo.EndsWith(".git", StringComparison.InvariantCultureIgnoreCase))
-                {
-                    repo = repo[0..^4];
-                }
-
-                // False positives, we may need to expand this.
-                if (user.Equals("repos", StringComparison.InvariantCultureIgnoreCase) ||
-                    user.Equals("metacpan", StringComparison.InvariantCultureIgnoreCase))
-                {
-                    continue;
-                }
-
-                // Create a PackageURL from what we know
-                PackageURL purl = new("github", user, repo, null, null, null);
-                purlList.Add(purl);
-            }
-
-            if (purlList.Count == 0)
-            {
-                Logger.Debug("No Github URLs were found.");
-                return Array.Empty<PackageURL>();
-            }
-            return purlList.Distinct();
+            return RepositoryUrlParser.Extract(content)
+                .Where(packageUrl => packageUrl.Type.Equals("github", StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>
@@ -450,7 +414,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 Logger.Trace(ex, "Error searching package metadata for {0}: {1}", purl, ex.Message);
             }
 
-            // Fall back to searching the metadata string for all possible GitHub URLs.
+            // Fall back to searching metadata for canonical repository URLs.
             SourceRepositoryCandidateSet metadataTextCandidates =
                 SourceRepositoryCandidateSet.FromCompatibilityDictionary(
                     purl,
@@ -508,10 +472,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 return sourceRepositoryMap;   // Empty
             }
 
-            // Simple regular expression, looking for GitHub URLs
-            // TODO: Expand this to Bitbucket, GitLab, etc.
-            // TODO: Bring this back, but like better.
-            /*IEnumerable<PackageURL> sourceUrls = GitHubProjectManager.ExtractGitHubUris(purl, rawMetadataString);
+            IEnumerable<PackageURL> sourceUrls = RepositoryUrlParser.Extract(rawMetadataString);
             if (sourceUrls != null && sourceUrls.Any())
             {
                 double baseScore = 0.8;     // Max confidence: 0.80
@@ -529,7 +490,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
 
                     sourceRepositoryMap.Add(group.Key, baseScore + similarityBoost + countBoost);
                 }
-            }*/
+            }
             return sourceRepositoryMap;
         }
 
