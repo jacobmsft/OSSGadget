@@ -8,9 +8,8 @@ public enum RepositoryVerificationStatus
 {
     NotAttempted,
     Verified,
-    NotFound,
-    Unsupported,
-    Failed
+    Rejected,
+    Inconclusive
 }
 
 public sealed class RepositoryVerification

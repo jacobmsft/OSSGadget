@@ -44,6 +44,18 @@ public class RepositoryVerificationTests
         Assert.Equal(upstream, result.UpstreamRepository);
     }
 
+    [Fact]
+    public async Task GitHubVerifierTreatsUnsupportedProvidersAsInconclusive()
+    {
+        PackageURL repository = new("gitlab", "example", "project", null, null, null);
+        GitHubRepositoryVerifier verifier = new(string.Empty);
+
+        RepositoryVerification result = await verifier.VerifyAsync(repository);
+
+        Assert.Equal(RepositoryVerificationStatus.Inconclusive, result.Status);
+        Assert.NotNull(result.FailureReason);
+    }
+
     private sealed class FakeRepositoryVerifier : IRepositoryVerifier
     {
         private readonly RepositoryVerification result;

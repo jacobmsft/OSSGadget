@@ -38,7 +38,10 @@ public sealed class GitHubRepositoryVerifier : IRepositoryVerifier
             string.IsNullOrWhiteSpace(repository.Namespace) ||
             string.IsNullOrWhiteSpace(repository.Name))
         {
-            return new RepositoryVerification(repository, RepositoryVerificationStatus.Unsupported);
+            return new RepositoryVerification(
+                repository,
+                RepositoryVerificationStatus.Inconclusive,
+                failureReason: "Only GitHub repository Package URLs can be verified.");
         }
 
         try
@@ -63,7 +66,7 @@ public sealed class GitHubRepositoryVerifier : IRepositoryVerifier
         }
         catch (NotFoundException)
         {
-            return new RepositoryVerification(repository, RepositoryVerificationStatus.NotFound);
+            return new RepositoryVerification(repository, RepositoryVerificationStatus.Rejected);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -73,7 +76,7 @@ public sealed class GitHubRepositoryVerifier : IRepositoryVerifier
         {
             return new RepositoryVerification(
                 repository,
-                RepositoryVerificationStatus.Failed,
+                RepositoryVerificationStatus.Inconclusive,
                 failureReason: ex.Message);
         }
     }
