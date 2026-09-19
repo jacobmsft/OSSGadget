@@ -197,8 +197,8 @@ namespace Microsoft.CST.OpenSource
                     {
                         PackageURL? purl = new PackageURL(target);
                         Dictionary<PackageURL, double> dictionary = await FindSourceAsync(purl);
-                        List<KeyValuePair<PackageURL, double>>? results = dictionary.ToList();
-                        results.Sort((b, a) => a.Value.CompareTo(b.Value));
+                        List<KeyValuePair<PackageURL, double>> results =
+                            SourceRepositoryConfidencePolicy.OrderMappings(dictionary).ToList();
                         if (findSourceToolOptions.Single)
                         {
                             AppendSingleOutput(outputBuilder, purl, results[0]);

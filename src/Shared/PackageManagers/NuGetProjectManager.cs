@@ -377,7 +377,14 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 {
                     if (githubPurl != null)
                     {
-                        mapping.Add(githubPurl, 1.0F);
+                        mapping[githubPurl] = SourceRepositoryConfidencePolicy.Rank(
+                            purl,
+                            githubPurl,
+                            new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.RequestedVersionAuthoritativeRepository)
+                            {
+                                IsRootPath = string.IsNullOrEmpty(githubPurl.Subpath),
+                                IsMalformed = string.IsNullOrWhiteSpace(githubPurl.Namespace) || string.IsNullOrWhiteSpace(githubPurl.Name),
+                            });
                     }
                 }
 

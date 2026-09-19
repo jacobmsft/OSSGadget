@@ -453,7 +453,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             // Fall back to searching the metadata string for all possible GitHub URLs.
             foreach (KeyValuePair<PackageURL, double> result in ExtractRankedSourceRepositories(purl, rawMetadataString))
             {
-                sourceRepositoryMap.Add(result.Key, result.Value);
+                sourceRepositoryMap[result.Key] = result.Value;
             }
 
             return sourceRepositoryMap;
@@ -483,7 +483,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         protected static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
         /// <summary>
-        /// Rank the source repo entry candidates by their edit distance.
+        /// Ranks GitHub URLs extracted from otherwise unstructured metadata.
         /// </summary>
         /// <param name="purl">the package</param>
         /// <param name="rawMetadataString">metadata of the package</param>
@@ -498,28 +498,17 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 return sourceRepositoryMap;   // Empty
             }
 
-            // Simple regular expression, looking for GitHub URLs
-            // TODO: Expand this to Bitbucket, GitLab, etc.
-            // TODO: Bring this back, but like better.
-            /*IEnumerable<PackageURL> sourceUrls = GitHubProjectManager.ExtractGitHubUris(purl, rawMetadataString);
-            if (sourceUrls != null && sourceUrls.Any())
+            IEnumerable<PackageURL> sourceUrls = ExtractGitHubPackageURLs(rawMetadataString);
+            foreach (PackageURL sourceUrl in sourceUrls)
             {
-                double baseScore = 0.8;     // Max confidence: 0.80
-                NormalizedLevenshtein levenshtein = new();
-
-                foreach (IGrouping<PackageURL, PackageURL>? group in sourceUrls.GroupBy(item => item))
+                SourceRepositoryEvidenceDescriptor evidence = new(SourceRepositoryEvidence.RawMetadataExtraction)
                 {
-                    // the cumulative boosts should be < 0.2; otherwise it'd be an 1.0 score by
-                    // Levenshtein distance
-                    double similarityBoost = levenshtein.Similarity(purl.Name, group.Key.Name) * 0.0001;
+                    IsRootPath = string.IsNullOrEmpty(sourceUrl.Subpath),
+                    IsMalformed = string.IsNullOrWhiteSpace(sourceUrl.Namespace) || string.IsNullOrWhiteSpace(sourceUrl.Name),
+                };
+                sourceRepositoryMap[sourceUrl] = SourceRepositoryConfidencePolicy.Rank(purl, sourceUrl, evidence);
+            }
 
-                    // give a similarly weighted boost based on the number of times a particular
-                    // candidate appear in the metadata
-                    double countBoost = group.Count() * 0.0001;
-
-                    sourceRepositoryMap.Add(group.Key, baseScore + similarityBoost + countBoost);
-                }
-            }*/
             return sourceRepositoryMap;
         }
 
