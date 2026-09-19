@@ -891,8 +891,16 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             {
                 // url = 'https://github.com/nodejs/node/tree/master/lib' + package.name,
 
-                mapping.Add(new PackageURL(purl.Type, purl.Namespace, purl.Name,
-                    null, null, "node/tree/master/lib"), 1.0F);
+                PackageURL curatedMapping = new(purl.Type, purl.Namespace, purl.Name, null, null, "node/tree/master/lib");
+                mapping.Add(
+                    curatedMapping,
+                    SourceRepositoryConfidencePolicy.Rank(
+                        purl,
+                        curatedMapping,
+                        new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.CuratedMapping)
+                        {
+                            IsRootPath = false,
+                        }));
                 return mapping;
             }
 
@@ -921,7 +929,14 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                         {
                             // we got a repository value the author specified in the metadata - so no
                             // further processing needed
-                            mapping.Add(gitPURL!, 1.0F);
+                            mapping[gitPURL!] = SourceRepositoryConfidencePolicy.Rank(
+                                purl,
+                                gitPURL!,
+                                new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.RequestedVersionAuthoritativeRepository)
+                                {
+                                    IsRootPath = string.IsNullOrEmpty(gitPURL!.Subpath),
+                                    IsMalformed = string.IsNullOrWhiteSpace(gitPURL.Namespace) || string.IsNullOrWhiteSpace(gitPURL.Name),
+                                });
                             return mapping;
                         }
                     }

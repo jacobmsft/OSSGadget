@@ -379,7 +379,14 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 {
                     if (repositoryPurl != null)
                     {
-                        mapping.Add(repositoryPurl, 1.0F);
+                        mapping[repositoryPurl] = SourceRepositoryConfidencePolicy.Rank(
+                            purl,
+                            repositoryPurl,
+                            new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.RequestedVersionAuthoritativeRepository)
+                            {
+                                IsRootPath = string.IsNullOrEmpty(repositoryPurl.Subpath),
+                                IsMalformed = string.IsNullOrWhiteSpace(repositoryPurl.Namespace) || string.IsNullOrWhiteSpace(repositoryPurl.Name),
+                            });
                     }
                 }
 

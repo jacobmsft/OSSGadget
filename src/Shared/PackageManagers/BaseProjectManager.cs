@@ -457,7 +457,7 @@ namespace Microsoft.CST.OpenSource.PackageManagers
         protected static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
         /// <summary>
-        /// Rank the source repo entry candidates by their edit distance.
+        /// Ranks GitHub URLs extracted from otherwise unstructured metadata.
         /// </summary>
         /// <param name="purl">the package</param>
         /// <param name="rawMetadataString">metadata of the package</param>
@@ -473,24 +473,16 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             }
 
             IEnumerable<PackageURL> sourceUrls = RepositoryUrlParser.Extract(rawMetadataString);
-            if (sourceUrls != null && sourceUrls.Any())
+            foreach (PackageURL sourceUrl in sourceUrls)
             {
-                double baseScore = 0.8;     // Max confidence: 0.80
-                NormalizedLevenshtein levenshtein = new();
-
-                foreach (IGrouping<PackageURL, PackageURL>? group in sourceUrls.GroupBy(item => item))
+                SourceRepositoryEvidenceDescriptor evidence = new(SourceRepositoryEvidence.RawMetadataExtraction)
                 {
-                    // the cumulative boosts should be < 0.2; otherwise it'd be an 1.0 score by
-                    // Levenshtein distance
-                    double similarityBoost = levenshtein.Similarity(purl.Name, group.Key.Name) * 0.0001;
-
-                    // give a similarly weighted boost based on the number of times a particular
-                    // candidate appear in the metadata
-                    double countBoost = group.Count() * 0.0001;
-
-                    sourceRepositoryMap.Add(group.Key, baseScore + similarityBoost + countBoost);
-                }
+                    IsRootPath = string.IsNullOrEmpty(sourceUrl.Subpath),
+                    IsMalformed = string.IsNullOrWhiteSpace(sourceUrl.Namespace) || string.IsNullOrWhiteSpace(sourceUrl.Name),
+                };
+                sourceRepositoryMap[sourceUrl] = SourceRepositoryConfidencePolicy.Rank(purl, sourceUrl, evidence);
             }
+
             return sourceRepositoryMap;
         }
 

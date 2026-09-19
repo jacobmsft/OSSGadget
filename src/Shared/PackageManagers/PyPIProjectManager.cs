@@ -514,7 +514,16 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             if (purl.Name?.StartsWith('_') ?? false) // TODO: there are internal modules which do not start with _
             {
                 // TODO: internal modules could also be in https://github.com/python/cpython/tree/master/Modules/
-                mapping.Add(new PackageURL(purl.Type, purl.Namespace, purl.Name, null, null, "cpython/tree/master/Lib/"), 1.0F);
+                PackageURL curatedMapping = new(purl.Type, purl.Namespace, purl.Name, null, null, "cpython/tree/master/Lib/");
+                mapping.Add(
+                    curatedMapping,
+                    SourceRepositoryConfidencePolicy.Rank(
+                        purl,
+                        curatedMapping,
+                        new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.CuratedMapping)
+                        {
+                            IsRootPath = false,
+                        }));
                 return mapping;
             }
             if (string.IsNullOrEmpty(metadata))
@@ -543,7 +552,10 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                     // if we were not able to extract a github url, continue
                     if (packageUrls.FirstOrDefault() is {} packageUrl)
                     {
-                        mapping.Add(packageUrl, 1.0F);
+                        mapping[packageUrl] = SourceRepositoryConfidencePolicy.Rank(
+                            purl,
+                            packageUrl,
+                            new SourceRepositoryEvidenceDescriptor(SourceRepositoryEvidence.HomepageOrDownloadInference));
                         return mapping;
                     }
                 }
@@ -565,7 +577,16 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                                 // if we were able to extract a github url, return
                                 if (packageUrls.FirstOrDefault() is { } packageUrl)
                                 {
-                                    mapping.Add(packageUrl, 1.0F);
+                                    bool isLabeledSource = projectUrl.Name.Contains("repo", StringComparison.OrdinalIgnoreCase) ||
+                                        projectUrl.Name.Contains("source", StringComparison.OrdinalIgnoreCase) ||
+                                        projectUrl.Name.Contains("code", StringComparison.OrdinalIgnoreCase);
+                                    mapping[packageUrl] = SourceRepositoryConfidencePolicy.Rank(
+                                        purl,
+                                        packageUrl,
+                                        new SourceRepositoryEvidenceDescriptor(
+                                            isLabeledSource
+                                                ? SourceRepositoryEvidence.LabeledProjectUrl
+                                                : SourceRepositoryEvidence.RawMetadataExtraction));
                                     return mapping;
                                 }
                             }
