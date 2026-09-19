@@ -30,12 +30,15 @@ namespace Microsoft.CST.OpenSource.Shared
         /// Initializes a new instance of the <see cref="RepoSearch"/> class.
         /// </summary>
         /// <param name="projectManagerFactory">The <see cref="ProjectManagerFactory"/> to generate the project managers with.</param>
-        public RepoSearch(ProjectManagerFactory projectManagerFactory)
+        public RepoSearch(IProjectManagerFactory projectManagerFactory, SourceDiscoveryPipeline? pipeline = null)
         {
             _projectManagerFactory = projectManagerFactory;
+            _pipeline = pipeline ?? SourceDiscoveryPipeline.CreateDefault();
         }
 
-        private ProjectManagerFactory _projectManagerFactory { get; }
+        private IProjectManagerFactory _projectManagerFactory { get; }
+
+        private SourceDiscoveryPipeline _pipeline { get; }
 
         /// <summary>
         ///     try to resolve the source code for an npm package through different means
@@ -49,7 +52,7 @@ namespace Microsoft.CST.OpenSource.Shared
         {
             Logger.Trace("ResolvePackageLibraryAsync({0})", purl);
 
-            Dictionary<PackageURL, double>? repoMappings = new();
+            Dictionary<PackageURL, double> repoMappings = new();
             if (purl == null)
             {
                 return repoMappings;
@@ -64,12 +67,14 @@ namespace Microsoft.CST.OpenSource.Shared
 
             if (projectManager != null)
             {
-                repoMappings = await projectManager.IdentifySourceRepositoryAsync(purl);
+                IReadOnlyList<SourceDiscoveryCandidate> candidates =
+                    await _pipeline.DiscoverAsync(new SourceDiscoveryContext(purl, projectManager));
+                repoMappings = candidates.ToDictionary(candidate => candidate.PackageUrl, candidate => candidate.Score);
 
-                if (repoMappings == null || !repoMappings.Any())
+                if (!repoMappings.Any())
                 {
                     repoMappings = new Dictionary<PackageURL, double>();
-                    Logger.Info("No repositories were found after searching metadata.");
+                    Logger.Info("No repositories were found after source discovery.");
                 }
             }
             else
