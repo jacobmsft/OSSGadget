@@ -243,5 +243,10 @@ namespace Microsoft.CST.OpenSource.PackageManagers
                 return null;
             }
         }
+
+        protected override Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
+        {
+            return Task.FromResult(SourceRepositoryExtractor.FromJson(purl, metadata));
+        }
     }
 }

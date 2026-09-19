@@ -190,5 +190,10 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             return new Uri($"{ENV_COMPOSER_ENDPOINT}/packages/{purl?.Namespace}/{purl?.Name}");
             // TODO: Add version support
         }
+
+        protected override Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
+        {
+            return Task.FromResult(SourceRepositoryExtractor.FromJson(purl, metadata));
+        }
     }
 }

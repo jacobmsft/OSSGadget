@@ -365,6 +365,11 @@ namespace Microsoft.CST.OpenSource.PackageManagers
             return metadata;
         }
 
+        protected override Task<Dictionary<PackageURL, double>> SearchRepoUrlsInPackageMetadata(PackageURL purl, string metadata)
+        {
+            return Task.FromResult(SourceRepositoryExtractor.FromJson(purl, metadata));
+        }
+
         public override Uri GetPackageAbsoluteUri(PackageURL purl)
         {
             string? packageName = purl?.Name;
