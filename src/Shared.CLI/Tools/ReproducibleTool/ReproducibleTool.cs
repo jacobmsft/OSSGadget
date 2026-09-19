@@ -210,6 +210,7 @@ namespace Microsoft.CST.OpenSource
 
                     // Locate the source
                     Console.WriteLine("Locating source...");
+                    string? sourceRepositorySubpath = null;
                     FindSourceTool? findSourceTool = new FindSourceTool(ProjectManagerFactory);
                     Dictionary<PackageURL, double>? sourceMap = await findSourceTool.FindSourceAsync(purl);
                     if (sourceMap.Any())
@@ -219,22 +220,15 @@ namespace Microsoft.CST.OpenSource
                             .ThenBy(result => result.Key.ToString(), StringComparer.OrdinalIgnoreCase)
                             .ThenBy(result => result.Key.ToString(), StringComparer.Ordinal)
                             .First().Key;
-                        if (string.IsNullOrEmpty(bestSourcePurl.Version))
-                        {
-                            // Tie back the original version to the new PackageURL
-                            bestSourcePurl = new PackageURL(bestSourcePurl.Type, bestSourcePurl.Namespace, bestSourcePurl.Name,
-                                                            purl.Version, bestSourcePurl.Qualifiers, bestSourcePurl.Subpath);
-                        }
+                        sourceRepositorySubpath = bestSourcePurl.Subpath;
                         Logger.Debug("Identified best source code repository: {0}", bestSourcePurl);
 
                         // Download the source
                         Console.WriteLine("Downloading source...");
-                        foreach (string? reference in new[] { bestSourcePurl.Version, reproducibleToolOptions.OverrideSourceReference, "master", "main" })
+                        foreach (string reference in GetSourceReferences(
+                            bestSourcePurl.Version,
+                            reproducibleToolOptions.OverrideSourceReference))
                         {
-                            if (string.IsNullOrWhiteSpace(reference))
-                            {
-                                continue;
-                            }
                             Logger.Debug("Trying to download package, version/reference [{0}].", reference);
                             PackageURL? purlRef = new PackageURL(bestSourcePurl.Type, bestSourcePurl.Namespace, bestSourcePurl.Name, reference, bestSourcePurl.Qualifiers, bestSourcePurl.Subpath);
                             packageDownloader = new PackageDownloader(purlRef, ProjectManagerFactory, Path.Join(tempDirectoryName, "src"));
@@ -255,10 +249,13 @@ namespace Microsoft.CST.OpenSource
                     }
 
                     // Execute all available strategies
+                    string sourceDirectory = ResolveSourceDirectory(
+                        Path.Join(tempDirectoryName, "src"),
+                        sourceRepositorySubpath);
                     StrategyOptions? strategyOptions = new StrategyOptions()
                     {
                         PackageDirectory = Path.Join(tempDirectoryName, "package"),
-                        SourceDirectory = Path.Join(tempDirectoryName, "src"),
+                        SourceDirectory = sourceDirectory,
                         PackageUrl = purl,
                         TemporaryDirectory = Path.GetFullPath(tempDirectoryName),
                         DiffTechnique = reproducibleToolOptions.DiffTechnique
@@ -492,6 +489,53 @@ namespace Microsoft.CST.OpenSource
             }
 
             return ErrorCode.Ok;
+        }
+
+        internal static IReadOnlyList<string> GetSourceReferences(
+            string? sourceReference,
+            string? fallbackSourceReference)
+        {
+            return new[]
+                {
+                    sourceReference,
+                    fallbackSourceReference,
+                    "master",
+                    "main"
+                }
+                .Where(reference => !string.IsNullOrWhiteSpace(reference))
+                .Select(reference => reference!)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+        }
+
+        internal static string ResolveSourceDirectory(string sourceDirectory, string? repositorySubpath)
+        {
+            if (string.IsNullOrWhiteSpace(repositorySubpath) || !System.IO.Directory.Exists(sourceDirectory))
+            {
+                return sourceDirectory;
+            }
+
+            string? repositoryRoot = OssReproducibleHelpers.GetFirstNonSingularDirectory(sourceDirectory);
+            if (repositoryRoot is null)
+            {
+                return sourceDirectory;
+            }
+
+            string normalizedSubpath = repositorySubpath
+                .Replace('/', Path.DirectorySeparatorChar)
+                .Replace('\\', Path.DirectorySeparatorChar);
+            string candidate = Path.GetFullPath(Path.Combine(repositoryRoot, normalizedSubpath));
+            string root = Path.GetFullPath(repositoryRoot) + Path.DirectorySeparatorChar;
+
+            if (candidate.StartsWith(root, StringComparison.OrdinalIgnoreCase) && System.IO.Directory.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            NLog.LogManager.GetCurrentClassLogger().Warn(
+                "Repository subpath [{0}] was not found under the downloaded source; using the repository root.",
+                repositorySubpath);
+            return sourceDirectory;
         }
     }
 }

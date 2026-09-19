@@ -69,4 +69,80 @@ public class ReproducibleTest
             Assert.Equal(expectedTarget, results.First());
         }
     }
+
+    [Fact]
+    public void SourceReferencesDoNotAssumePackageVersion()
+    {
+        IReadOnlyList<string> references = ReproducibleTool.GetSourceReferences(null, null);
+
+        Assert.Equal(new[] { "master", "main" }, references);
+    }
+
+    [Fact]
+    public void SourceReferencesPreferExplicitRefsAndKeepBranchFallbacks()
+    {
+        IReadOnlyList<string> references = ReproducibleTool.GetSourceReferences("release/1.2", "v1.2.3");
+
+        Assert.Equal(new[] { "release/1.2", "v1.2.3", "master", "main" }, references);
+    }
+
+    [Fact]
+    public void SourceReferencesAreDeduplicated()
+    {
+        IReadOnlyList<string> references = ReproducibleTool.GetSourceReferences("main", "main");
+
+        Assert.Equal(new[] { "main", "master" }, references);
+    }
+
+    [Fact]
+    public void ResolveSourceDirectoryUsesRepositorySubpath()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        string sourceDirectory = Path.Combine(tempDirectory, "src");
+        string repositoryRoot = Path.Combine(sourceDirectory, "github-example-repo-main", "repo-main");
+        string packageDirectory = Path.Combine(repositoryRoot, "packages", "widget");
+
+        try
+        {
+            Directory.CreateDirectory(packageDirectory);
+            File.WriteAllText(Path.Combine(repositoryRoot, "README.md"), "root");
+            File.WriteAllText(Path.Combine(packageDirectory, "package.json"), "{}");
+
+            string result = ReproducibleTool.ResolveSourceDirectory(sourceDirectory, "packages/widget");
+
+            Assert.Equal(packageDirectory, result);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, true);
+            }
+        }
+    }
+
+    [Fact]
+    public void ResolveSourceDirectoryRejectsTraversal()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        string sourceDirectory = Path.Combine(tempDirectory, "src");
+        string repositoryRoot = Path.Combine(sourceDirectory, "repo-main");
+
+        try
+        {
+            Directory.CreateDirectory(repositoryRoot);
+            Directory.CreateDirectory(Path.Combine(tempDirectory, "outside"));
+
+            string result = ReproducibleTool.ResolveSourceDirectory(sourceDirectory, "../outside");
+
+            Assert.Equal(sourceDirectory, result);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, true);
+            }
+        }
+    }
 }
