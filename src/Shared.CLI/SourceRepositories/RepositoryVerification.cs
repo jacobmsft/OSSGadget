@@ -7,6 +7,7 @@ using PackageUrl;
 public enum RepositoryVerificationStatus
 {
     NotAttempted,
+    // Repository access does not prove package provenance or validate its ref/subpath.
     Verified,
     Rejected,
     Inconclusive

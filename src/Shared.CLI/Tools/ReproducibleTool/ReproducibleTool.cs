@@ -181,9 +181,11 @@ namespace Microsoft.CST.OpenSource
                 }
             }
             List<ReproducibleToolResult>? finalResults = new List<ReproducibleToolResult>();
+            ErrorCode exitCode = ErrorCode.Ok;
 
             foreach (string? target in targets)
             {
+                string? tempDirectoryName = null;
                 try
                 {
                     Console.WriteLine($"Analyzing {target}...");
@@ -196,7 +198,7 @@ namespace Microsoft.CST.OpenSource
                         continue;
                     }
 
-                    string? tempDirectoryName = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString().Substring(0, 8));
+                    tempDirectoryName = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString().Substring(0, 8));
                     FileSystemHelper.RetryDeleteDirectory(tempDirectoryName);
                     // Download the package
                     Console.WriteLine("Downloading package...");
@@ -210,7 +212,7 @@ namespace Microsoft.CST.OpenSource
 
                     // Locate the source
                     Console.WriteLine("Locating source...");
-                    string? sourceRepositorySubpath = null;
+                    string sourceDirectory = Path.Join(tempDirectoryName, "src");
                     FindSourceTool? findSourceTool = new FindSourceTool(ProjectManagerFactory);
                     Dictionary<PackageURL, double>? sourceMap = await findSourceTool.FindSourceAsync(purl);
                     if (sourceMap.Any())
@@ -218,7 +220,6 @@ namespace Microsoft.CST.OpenSource
                         List<KeyValuePair<PackageURL, double>>? sourceMapList = sourceMap.ToList();
                         sourceMapList.Sort((a, b) => a.Value.CompareTo(b.Value));
                         PackageURL? bestSourcePurl = sourceMapList.Last().Key;
-                        sourceRepositorySubpath = bestSourcePurl.Subpath;
                         Logger.Debug("Identified best source code repository: {0}", bestSourcePurl);
 
                         // Download the source
@@ -233,6 +234,16 @@ namespace Microsoft.CST.OpenSource
                             downloadResults = await packageDownloader.DownloadPackageLocalCopy(purlRef, false, true);
                             if (downloadResults.Any())
                             {
+                                if (!string.IsNullOrEmpty(bestSourcePurl.Subpath))
+                                {
+                                    if (downloadResults.Count != 1)
+                                    {
+                                        throw new InvalidDataException("Cannot resolve a repository subpath across multiple source downloads.");
+                                    }
+
+                                    string repositoryRoot = GetSourceRepositoryRoot(downloadResults[0], bestSourcePurl.Type);
+                                    sourceDirectory = ResolveSourceDirectory(repositoryRoot, bestSourcePurl.Subpath);
+                                }
                                 break;
                             }
                         }
@@ -247,9 +258,6 @@ namespace Microsoft.CST.OpenSource
                     }
 
                     // Execute all available strategies
-                    string sourceDirectory = ResolveSourceDirectory(
-                        Path.Join(tempDirectoryName, "src"),
-                        sourceRepositorySubpath);
                     StrategyOptions? strategyOptions = new StrategyOptions()
                     {
                         PackageDirectory = Path.Join(tempDirectoryName, "package"),
@@ -441,21 +449,27 @@ namespace Microsoft.CST.OpenSource
                     {
                         Console.WriteLine($"  [{Red(scoreDisplay + "%")}] {Red(scoreText)}");
                     }
-
-                    if (reproducibleToolOptions.LeaveIntermediateFiles)
-                    {
-                        Console.WriteLine();
-                        Console.WriteLine($"Intermediate files are located in [{tempDirectoryName}].");
-                    }
-                    else
-                    {
-                        FileSystemHelper.RetryDeleteDirectory(tempDirectoryName);
-                    }
                 }
                 catch (Exception ex)
                 {
+                    exitCode = ErrorCode.ProcessingException;
                     Logger.Warn(ex, "Error processing {0}: {1}", target, ex.Message);
                     Logger.Debug(ex.StackTrace);
+                }
+                finally
+                {
+                    if (tempDirectoryName != null)
+                    {
+                        if (reproducibleToolOptions.LeaveIntermediateFiles)
+                        {
+                            Console.WriteLine();
+                            Console.WriteLine($"Intermediate files are located in [{tempDirectoryName}].");
+                        }
+                        else
+                        {
+                            FileSystemHelper.RetryDeleteDirectory(tempDirectoryName);
+                        }
+                    }
                 }
             }
 
@@ -486,13 +500,14 @@ namespace Microsoft.CST.OpenSource
                 Logger.Debug("No results were produced.");
             }
 
-            return ErrorCode.Ok;
+            return exitCode;
         }
 
         internal static IReadOnlyList<string> GetSourceReferences(
             string? sourceReference,
             string? fallbackSourceReference)
         {
+            // A registry version is not evidence of a git ref, even when their names happen to match.
             return new[]
                 {
                     sourceReference,
@@ -506,34 +521,55 @@ namespace Microsoft.CST.OpenSource
                 .ToList();
         }
 
-        internal static string ResolveSourceDirectory(string sourceDirectory, string? repositorySubpath)
+        internal static string GetSourceRepositoryRoot(string extractionDirectory, string sourceType)
         {
-            if (string.IsNullOrWhiteSpace(repositorySubpath) || !System.IO.Directory.Exists(sourceDirectory))
+            if (!string.Equals(sourceType, "github", StringComparison.OrdinalIgnoreCase))
             {
-                return sourceDirectory;
+                return extractionDirectory;
             }
 
-            string? repositoryRoot = OssReproducibleHelpers.GetFirstNonSingularDirectory(sourceDirectory);
-            if (repositoryRoot is null)
+            // GitHub archives add one wrapper; recursive unwrapping would consume real monorepo directories.
+            string[] entries = System.IO.Directory.GetFileSystemEntries(extractionDirectory);
+            if (entries.Length != 1 || !System.IO.Directory.Exists(entries[0]))
             {
-                return sourceDirectory;
+                throw new InvalidDataException("Expected a single repository root in the downloaded GitHub archive.");
+            }
+
+            return entries[0];
+        }
+
+        internal static string ResolveSourceDirectory(string repositoryRoot, string? repositorySubpath)
+        {
+            if (string.IsNullOrEmpty(repositorySubpath))
+            {
+                return repositoryRoot;
             }
 
             string normalizedSubpath = repositorySubpath
                 .Replace('/', Path.DirectorySeparatorChar)
                 .Replace('\\', Path.DirectorySeparatorChar);
-            string candidate = Path.GetFullPath(Path.Combine(repositoryRoot, normalizedSubpath));
-            string root = Path.GetFullPath(repositoryRoot) + Path.DirectorySeparatorChar;
-
-            if (candidate.StartsWith(root, StringComparison.OrdinalIgnoreCase) && System.IO.Directory.Exists(candidate))
+            if (Path.IsPathRooted(normalizedSubpath) ||
+                normalizedSubpath.Split(Path.DirectorySeparatorChar).Any(segment => segment is "." or ".."))
             {
-                return candidate;
+                throw new ArgumentException("Repository subpath must be relative and cannot contain traversal segments.", nameof(repositorySubpath));
             }
 
-            NLog.LogManager.GetCurrentClassLogger().Warn(
-                "Repository subpath [{0}] was not found under the downloaded source; using the repository root.",
-                repositorySubpath);
-            return sourceDirectory;
+            string candidate = Path.GetFullPath(Path.Combine(repositoryRoot, normalizedSubpath));
+            string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot)) + Path.DirectorySeparatorChar;
+            StringComparison comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+            if (!candidate.StartsWith(root, comparison))
+            {
+                throw new ArgumentException("Repository subpath must stay within the repository root.", nameof(repositorySubpath));
+            }
+
+            // Falling back to the whole repository could report a match using a different package's files.
+            if (!System.IO.Directory.Exists(candidate))
+            {
+                throw new DirectoryNotFoundException($"Repository subpath [{repositorySubpath}] was not found in the downloaded source.");
+            }
+
+            return candidate;
         }
     }
 }

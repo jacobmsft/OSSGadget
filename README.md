@@ -72,6 +72,12 @@ See [Docker Image](https://github.com/microsoft/OSSGadget/wiki/Docker-Image) in 
 ### Advanced Usage
 See [Advanced Usage](https://github.com/microsoft/OSSGadget/wiki/Advanced-Usage) in the wiki for advanced usage information like changing API endpoints.
 
+### Source Verification and Reproducibility
+
+Repository verification is opt-in through `IRepositoryVerifier`; the default verifier does not contact a provider. The GitHub verifier confirms repository access, not that the repository produces the package. A GitHub 404 is inconclusive because it can also mean the credentials cannot access a private repository.
+
+`oss-reproducible` does not assume a package version is a source tag. It tries the discovered source ref, `--source-ref`, then `master` and `main`, without duplicate attempts. When a source repository specifies a monorepo subpath, comparisons are limited to that directory; a missing or invalid subpath stops the comparison with a processing error rather than falling back to unrelated repository contents.
+
 ### Reporting Security Vulnerabilities
 
 To report a security vulnerability, please see [SECURITY.md](SECURITY.md).

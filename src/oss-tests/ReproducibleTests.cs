@@ -94,8 +94,10 @@ public class ReproducibleTest
         Assert.Equal(new[] { "main", "master" }, references);
     }
 
-    [Fact]
-    public void ResolveSourceDirectoryUsesRepositorySubpath()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ResolveSourceDirectoryUsesRepositorySubpath(bool hasRootFile)
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         string sourceDirectory = Path.Combine(tempDirectory, "src");
@@ -105,10 +107,13 @@ public class ReproducibleTest
         try
         {
             Directory.CreateDirectory(packageDirectory);
-            File.WriteAllText(Path.Combine(repositoryRoot, "README.md"), "root");
+            if (hasRootFile)
+            {
+                File.WriteAllText(Path.Combine(repositoryRoot, "README.md"), "root");
+            }
             File.WriteAllText(Path.Combine(packageDirectory, "package.json"), "{}");
 
-            string result = ReproducibleTool.ResolveSourceDirectory(sourceDirectory, "packages/widget");
+            string result = ReproducibleTool.ResolveSourceDirectory(repositoryRoot, "packages/widget");
 
             Assert.Equal(packageDirectory, result);
         }
@@ -121,8 +126,15 @@ public class ReproducibleTest
         }
     }
 
-    [Fact]
-    public void ResolveSourceDirectoryRejectsTraversal()
+    [Theory]
+    [InlineData("../outside")]
+    [InlineData("..\\outside")]
+    [InlineData("packages/../widget")]
+    [InlineData("/outside")]
+    [InlineData("\\outside")]
+    [InlineData(".")]
+    [InlineData("..")]
+    public void ResolveSourceDirectoryRejectsTraversal(string subpath)
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         string sourceDirectory = Path.Combine(tempDirectory, "src");
@@ -133,9 +145,33 @@ public class ReproducibleTest
             Directory.CreateDirectory(repositoryRoot);
             Directory.CreateDirectory(Path.Combine(tempDirectory, "outside"));
 
-            string result = ReproducibleTool.ResolveSourceDirectory(sourceDirectory, "../outside");
+            Assert.Throws<ArgumentException>(
+                () => ReproducibleTool.ResolveSourceDirectory(repositoryRoot, subpath));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, true);
+            }
+        }
+    }
 
-            Assert.Equal(sourceDirectory, result);
+    [Fact]
+    public void ResolveSourceDirectoryRejectsMissingSubpathInsteadOfComparingSiblings()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        string repositoryRoot = Path.Combine(tempDirectory, "repo-main");
+        string siblingDirectory = Path.Combine(repositoryRoot, "packages", "sibling");
+
+        try
+        {
+            Directory.CreateDirectory(siblingDirectory);
+            File.WriteAllText(Path.Combine(repositoryRoot, "README.md"), "root");
+            File.WriteAllText(Path.Combine(siblingDirectory, "index.js"), "module.exports = 1;");
+
+            Assert.Throws<DirectoryNotFoundException>(
+                () => ReproducibleTool.ResolveSourceDirectory(repositoryRoot, "packages/missing"));
         }
         finally
         {

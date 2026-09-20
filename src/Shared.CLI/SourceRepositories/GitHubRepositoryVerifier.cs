@@ -47,7 +47,9 @@ public sealed class GitHubRepositoryVerifier : IRepositoryVerifier
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Octokit.Repository githubRepository = await client.Repository.Get(repository.Namespace, repository.Name);
+            // Cancellation stops our wait; Octokit may finish the underlying request later.
+            Octokit.Repository githubRepository = await client.Repository.Get(repository.Namespace, repository.Name)
+                .WaitAsync(cancellationToken);
             PackageURL? upstreamRepository = githubRepository.Parent is null
                 ? null
                 : new PackageURL(
@@ -66,7 +68,11 @@ public sealed class GitHubRepositoryVerifier : IRepositoryVerifier
         }
         catch (NotFoundException)
         {
-            return new RepositoryVerification(repository, RepositoryVerificationStatus.Rejected);
+            // GitHub hides inaccessible private repositories behind 404s, so absence is not established.
+            return new RepositoryVerification(
+                repository,
+                RepositoryVerificationStatus.Inconclusive,
+                failureReason: "Repository was not found or is not accessible with the supplied credentials.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

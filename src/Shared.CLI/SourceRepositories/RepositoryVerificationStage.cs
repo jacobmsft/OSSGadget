@@ -14,6 +14,7 @@ public sealed class RepositoryVerificationStage
 
     public RepositoryVerificationStage(IRepositoryVerifier? repositoryVerifier = null)
     {
+        // Default checks must not add provider traffic to offline or cached discovery.
         this.repositoryVerifier = repositoryVerifier ?? new NoOpRepositoryVerifier();
     }
 
